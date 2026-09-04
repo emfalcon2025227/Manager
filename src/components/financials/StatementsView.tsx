@@ -465,6 +465,46 @@ export const StatementsView: React.FC = () => {
               </div>
             </div>
 
+            {/* Categorized KPI Summary Cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-center">
+              <div className="p-3 bg-slate-100 border border-slate-200 rounded-xl">
+                <div className="text-[11px] font-semibold text-slate-700">{isAr ? "القيمة الإيجارية للعقد" : "Contract Rent"}</div>
+                <div className="text-sm font-bold font-mono text-slate-900 mt-1">
+                  {(tenantStatement.contractRentalValue || 0).toLocaleString()} AED
+                </div>
+              </div>
+              <div className="p-3 bg-emerald-50/70 border border-emerald-200 rounded-xl">
+                <div className="text-[11px] font-semibold text-emerald-800">{isAr ? "الإيجار المحصل" : "Rent Collected"}</div>
+                <div className="text-sm font-bold font-mono text-emerald-700 mt-1">
+                  {(tenantStatement.totalCollectedRent || 0).toLocaleString()} AED
+                </div>
+              </div>
+              <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-xl">
+                <div className="text-[11px] font-semibold text-amber-800">{isAr ? "شيكات آجلة (PDC)" : "PDC Pending"}</div>
+                <div className="text-sm font-bold font-mono text-amber-700 mt-1">
+                  {(tenantStatement.totalPdcPending || 0).toLocaleString()} AED
+                </div>
+              </div>
+              <div className="p-3 bg-blue-50/70 border border-blue-200 rounded-xl">
+                <div className="text-[11px] font-semibold text-blue-800">{isAr ? "الرسوم الإدارية" : "Admin Fees"}</div>
+                <div className="text-sm font-bold font-mono text-blue-700 mt-1">
+                  {(tenantStatement.totalAdminFees || 0).toLocaleString()} AED
+                </div>
+              </div>
+              <div className="p-3 bg-purple-50/70 border border-purple-200 rounded-xl">
+                <div className="text-[11px] font-semibold text-purple-800">{isAr ? "رسوم التوثيق/التصديق" : "Attestation Fees"}</div>
+                <div className="text-sm font-bold font-mono text-purple-700 mt-1">
+                  {(tenantStatement.totalAttestationFees || 0).toLocaleString()} AED
+                </div>
+              </div>
+              <div className="p-3 bg-rose-50/70 border border-rose-200 rounded-xl">
+                <div className="text-[11px] font-semibold text-rose-800">{isAr ? "صافي المستحق النهائي" : "Net Outstanding"}</div>
+                <div className="text-sm font-black font-mono text-rose-700 mt-1">
+                  {Number(tenantStatement.closingBalance || 0).toLocaleString()} AED
+                </div>
+              </div>
+            </div>
+
             {/* Transactions Table */}
             <div className="border border-slate-200 rounded-xl overflow-hidden">
               <table className="w-full text-right text-sm">
@@ -472,7 +512,7 @@ export const StatementsView: React.FC = () => {
                   <tr>
                     <th className="px-4 py-3">{isAr ? "التاريخ" : "Date"}</th>
                     <th className="px-4 py-3">{isAr ? "المرجع" : "Ref"}</th>
-                    <th className="px-4 py-3">{isAr ? "نوع الحركة" : "Type"}</th>
+                    <th className="px-4 py-3">{isAr ? "الفئة والنوع" : "Category / Type"}</th>
                     <th className="px-4 py-3">{isAr ? "البيان والتفاصيل" : "Description"}</th>
                     <th className="px-4 py-3 text-rose-700">{isAr ? "مطالبة / مستحق (Debit)" : "Debit"}</th>
                     <th className="px-4 py-3 text-emerald-700">{isAr ? "سداد / مقبوض (Credit)" : "Credit"}</th>
@@ -480,27 +520,43 @@ export const StatementsView: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-mono text-xs">
-                  {tenantStatement.transactions.map((tx) => (
-                    <tr key={tx.id} className="hover:bg-slate-50/50">
-                      <td className="px-4 py-3 text-slate-600">{tx.date}</td>
-                      <td className="px-4 py-3 font-bold text-slate-800">{tx.reference}</td>
-                      <td className="px-4 py-3 font-sans">
-                        <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-slate-100 text-slate-700">
-                          {tx.eventType}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 font-sans text-slate-700">{tx.description}</td>
-                      <td className="px-4 py-3 text-rose-600 font-bold">
-                        {tx.debit > 0 ? tx.debit.toLocaleString() : "—"}
-                      </td>
-                      <td className="px-4 py-3 text-emerald-600 font-bold">
-                        {tx.credit > 0 ? tx.credit.toLocaleString() : "—"}
-                      </td>
-                      <td className="px-4 py-3 font-bold text-slate-900">
-                        {tx.runningBalance.toLocaleString()} AED
-                      </td>
-                    </tr>
-                  ))}
+                  {tenantStatement.transactions.map((tx) => {
+                    const categoryBadge = tx.category === "ADMIN_FEE"
+                      ? "bg-blue-100 text-blue-800"
+                      : tx.category === "ATTESTATION_FEE"
+                      ? "bg-purple-100 text-purple-800"
+                      : tx.category === "RENT"
+                      ? "bg-emerald-100 text-emerald-800"
+                      : "bg-slate-100 text-slate-700";
+
+                    return (
+                      <tr key={tx.id} className="hover:bg-slate-50/50">
+                        <td className="px-4 py-3 text-slate-600">{tx.date}</td>
+                        <td className="px-4 py-3 font-bold text-slate-800">{tx.reference}</td>
+                        <td className="px-4 py-3 font-sans">
+                          <span className={`px-2 py-0.5 rounded text-[11px] font-semibold ${categoryBadge}`}>
+                            {tx.category === "ADMIN_FEE"
+                              ? isAr ? "رسوم إدارية" : "Admin Fee"
+                              : tx.category === "ATTESTATION_FEE"
+                              ? isAr ? "توثيق وتصديق" : "Attestation Fee"
+                              : tx.category === "RENT"
+                              ? isAr ? "إيجار" : "Rent"
+                              : tx.eventType}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 font-sans text-slate-700">{tx.description}</td>
+                        <td className="px-4 py-3 text-rose-600 font-bold">
+                          {tx.debit > 0 ? tx.debit.toLocaleString() : "—"}
+                        </td>
+                        <td className="px-4 py-3 text-emerald-600 font-bold">
+                          {tx.credit > 0 ? tx.credit.toLocaleString() : "—"}
+                        </td>
+                        <td className="px-4 py-3 font-bold text-slate-900">
+                          {tx.runningBalance.toLocaleString()} AED
+                        </td>
+                      </tr>
+                    );
+                  })}
 
                   {tenantStatement.transactions.length === 0 && (
                     <tr>

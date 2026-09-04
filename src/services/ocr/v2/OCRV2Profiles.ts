@@ -64,6 +64,29 @@ export const OCR_V2_PROFILES: Record<OCRProfileKey, OCRV2ProfileConfig> = {
     backendEndpoint: "/api/ocr/v2/extract",
     enableSmartRetry: true
   },
+  BANK_DEPOSIT_PROOF: {
+    documentType: "BANK_DEPOSIT_PROOF",
+    recommendedModel: "accurate",
+    fallbackModel: "forensic",
+    preprocessingOptions: {
+      minWidth: 1400,
+      applyContrast: true,
+      applyNormalization: true,
+      applySharpening: true,
+      convertToGrayscale: false,
+      variant: "high_contrast"
+    },
+    schemaRules: {
+      bankName: { type: "string", required: true, minConfidenceThreshold: 70 },
+      depositAmount: { type: "number", required: true, minConfidenceThreshold: 80 },
+      depositDate: { type: "date", required: true, minConfidenceThreshold: 75 },
+      referenceNumber: { type: "string", required: false, minConfidenceThreshold: 65 },
+      accountNumber: { type: "string", required: false, minConfidenceThreshold: 60 },
+      documentClassification: { type: "string", required: false }
+    },
+    backendEndpoint: "/api/ocr/v2/extract",
+    enableSmartRetry: true
+  },
   LEASE_AGREEMENT: {
     documentType: "LEASE_AGREEMENT",
     recommendedModel: "accurate",

@@ -1731,6 +1731,9 @@ export interface TenantStatementItem {
   reference: string;
   eventType:
     | "RENT_CHARGE"
+    | "RENT_INSTALLMENT"
+    | "ADMINISTRATIVE_FEE"
+    | "ATTESTATION_FEE"
     | "TENANT_COMMISSION"
     | "PAYMENT_RECEIVED"
     | "CHEQUE_CLEARED"
@@ -1739,6 +1742,8 @@ export interface TenantStatementItem {
     | "TENANT_EXPENSE_CHARGE"
     | "ADJUSTMENT"
     | "REVERSAL";
+  category?: "RENT" | "ADMIN_FEE" | "ATTESTATION_FEE" | "EXPENSE" | "COMMISSION" | "ADJUSTMENT" | "OTHER";
+  status?: "COLLECTED" | "PDC_PENDING" | "CLEARED" | "BOUNCED" | "WAIVED" | "UNPAID";
   description: string;
   propertyName?: string;
   unitNumber?: string;
@@ -1759,6 +1764,12 @@ export interface TenantStatementReport {
   totalDebits: number;
   totalCredits: number;
   closingBalance: number; // Outstanding Tenant Debt
+  contractRentalValue?: number; // Total annual rental value of active contracts
+  totalCollectedRent?: number; // Total rent actually collected
+  totalPdcPending?: number; // Cheques in PDC / not yet collected
+  totalAdminFees?: number; // Total administrative fees billed
+  totalAttestationFees?: number; // Total contract attestation fees billed
+  totalOtherFees?: number; // Other fees/expenses billed to tenant
   transactions: TenantStatementItem[];
   generatedAt: string;
 }

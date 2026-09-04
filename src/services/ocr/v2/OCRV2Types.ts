@@ -6,6 +6,7 @@
 export type OCRProfileKey = 
   | "EMIRATES_ID"
   | "CHEQUE"
+  | "BANK_DEPOSIT_PROOF"
   | "LEASE_AGREEMENT"
   | "INVOICE"
   | "RECEIPT"

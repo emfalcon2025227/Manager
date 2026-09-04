@@ -1287,7 +1287,7 @@ export function generateTenantStatement(
   }
 ): TenantStatementReport {
   const reversedCollectionIds = new Set(
-    data.reversals.filter((r) => r.targetType === "COLLECTION").map((r) => r.targetId)
+    (data.reversals || []).filter((r) => r.targetType === "COLLECTION").map((r) => r.targetId)
   );
 
   const rawItems: Array<{
@@ -1295,6 +1295,8 @@ export function generateTenantStatement(
     date: string;
     reference: string;
     eventType: TenantStatementItem["eventType"];
+    category: NonNullable<TenantStatementItem["category"]>;
+    status?: TenantStatementItem["status"];
     description: string;
     propertyId?: string;
     propertyName?: string;
@@ -1305,17 +1307,27 @@ export function generateTenantStatement(
     sourceEntityId?: string;
   }> = [];
 
-  // 1. Rent Charges from Leases
+  let contractRentalValue = 0;
+  let totalCollectedRent = 0;
+  let totalPdcPending = 0;
+  let totalAdminFees = 0;
+  let totalAttestationFees = 0;
+  let totalOtherFees = 0;
+
+  // 1. Rent Charges from Leases (Annual Rent Contractual Value)
   for (const lse of (data.leases || [])) {
     if (!lse || lse.tenantId !== tenantId) continue;
     if (filters.leaseId && lse.id !== filters.leaseId) continue;
 
+    contractRentalValue += lse.annualRent || 0;
     const lseId = lse.id || "lease";
     rawItems.push({
       id: `tstmt-rent-${lseId}`,
       date: lse.startDate || new Date().toISOString().slice(0, 10),
       reference: lse.leaseNumber || `LSE-${lseId.slice(0, 6)}`,
       eventType: "RENT_CHARGE",
+      category: "RENT",
+      status: "UNPAID",
       description: `استحقاق القيمة الإيجارية السنوية - عقد رقم ${lse.leaseNumber || lseId}`,
       propertyId: lse.propertyId,
       unitNumber: lse.unitId,
@@ -1326,19 +1338,34 @@ export function generateTenantStatement(
     });
   }
 
-  // 2. Tenant Commissions
+  // 2. Tenant Administrative Fees & Commissions
   for (const com of (data.commissions || [])) {
     if (!com || com.tenantId !== tenantId || com.partyType !== "TENANT" || com.status === "CANCELLED") continue;
     if (filters.leaseId && com.leaseId !== filters.leaseId) continue;
+
+    const comDesc = (com as any).description || (com as any).notes || "";
+    const isAttestation = comDesc.includes("توثيق") || comDesc.includes("تصديق") || (com as any).feeType === "ATTESTATION";
+    const category = isAttestation ? "ATTESTATION_FEE" : "ADMIN_FEE";
+    const eventType = isAttestation ? "ATTESTATION_FEE" : "ADMINISTRATIVE_FEE";
+
+    if (isAttestation) {
+      totalAttestationFees += com.totalCommissionAmount;
+    } else {
+      totalAdminFees += com.totalCommissionAmount;
+    }
 
     const comId = com.id || "com";
     const createdDate = com.createdAt ? com.createdAt.slice(0, 10) : new Date().toISOString().slice(0, 10);
     rawItems.push({
       id: `tstmt-com-${comId}`,
       date: com.dueDate || createdDate,
-      reference: `TCOM-${comId.slice(0, 6)}`,
-      eventType: "TENANT_COMMISSION",
-      description: `رسوم إدارية وخدمات تأجير (${com.ratePercentage || 5}%)` + (com.vatAmount ? ` (شامل ضريبة القيمة المضافة 5%)` : ""),
+      reference: `FEE-${comId.slice(0, 6)}`,
+      eventType: eventType,
+      category: category,
+      status: com.status === "COLLECTED" || com.status === "FULLY_COLLECTED" ? "COLLECTED" : "UNPAID",
+      description: isAttestation
+        ? `رسوم توثيق وتصديق عقد الإيجار (${com.totalCommissionAmount.toLocaleString()} درهم)`
+        : `رسوم إدارية وخدمات تأجير (${com.ratePercentage || 5}%)` + (com.vatAmount ? ` (شامل ضريبة القيمة المضافة 5%)` : ""),
       propertyId: com.propertyId,
       unitNumber: com.unitId,
       debit: com.totalCommissionAmount,
@@ -1347,19 +1374,33 @@ export function generateTenantStatement(
     });
   }
 
-  // 3. Tenant-Borne Expenses
+  // 3. Tenant-Borne Expenses & Attestations
   for (const exp of (data.expenses || [])) {
     if (!exp || exp.tenantId !== tenantId || exp.costBearer !== "TENANT" || exp.status === "CANCELLED" || exp.status === "REVERSED") continue;
     if (filters.leaseId && exp.leaseId !== filters.leaseId) continue;
+
+    const isAttestation = (exp.category as string) === "CONTRACT_ATTESTATION" || (exp.description || "").includes("توثيق") || (exp.description || "").includes("تصديق");
+    const category = isAttestation ? "ATTESTATION_FEE" : "EXPENSE";
+    const eventType = isAttestation ? "ATTESTATION_FEE" : "TENANT_EXPENSE_CHARGE";
+
+    if (isAttestation) {
+      totalAttestationFees += exp.totalAmount;
+    } else {
+      totalOtherFees += exp.totalAmount;
+    }
 
     const expId = exp.id || "exp";
     const createdDate = exp.createdAt ? exp.createdAt.slice(0, 10) : new Date().toISOString().slice(0, 10);
     rawItems.push({
       id: `tstmt-exp-${expId}`,
       date: exp.expenseDate || createdDate,
-      reference: exp.expenseNumber,
-      eventType: "TENANT_EXPENSE_CHARGE",
-      description: `رسوم ومصاريف محملة على المستأجر: ${exp.description}`,
+      reference: exp.expenseNumber || `EXP-${expId.slice(0, 6)}`,
+      eventType: eventType,
+      category: category,
+      status: (exp as any).status === "PAID" ? "COLLECTED" : "UNPAID",
+      description: isAttestation
+        ? `رسوم تصديق / توثيق العقد لدى البلدية: ${exp.description}`
+        : `رسوم ومصاريف محملة على المستأجر: ${exp.description}`,
       propertyId: exp.propertyId,
       unitNumber: exp.unitId,
       debit: exp.totalAmount,
@@ -1368,24 +1409,47 @@ export function generateTenantStatement(
     });
   }
 
-  // 4. Payments Received (Collections) -> CREDIT
+  // 4. Payments Received (Collections / Receipts) -> CREDIT
   for (const col of (data.collections || [])) {
     if (!col || col.tenantId !== tenantId || reversedCollectionIds.has(col.id)) continue;
     const colId = col.id || "col";
     const createdDate = col.createdAt ? col.createdAt.slice(0, 10) : new Date().toISOString().slice(0, 10);
+    
+    // Categorize collection
+    let category: NonNullable<TenantStatementItem["category"]> = "RENT";
+    let desc = `سداد دفعة إيجار / سند قبض (${col.paymentMethod})`;
+    const rentAmount = col.amountEntered - (col.bouncedFeeAmount || 0) - (col.adminFeeAmount || 0);
+
+    if (col.adminFeeAmount && col.adminFeeAmount > 0) {
+      totalAdminFees += col.adminFeeAmount;
+    }
+    totalCollectedRent += Math.max(0, rentAmount);
+
     rawItems.push({
       id: `tstmt-col-${colId}`,
       date: col.paymentDate || createdDate,
       reference: col.receiptNumber || `RCP-${colId.slice(0, 6)}`,
       eventType: "PAYMENT_RECEIVED",
-      description: `سداد دفعة إيجار / سند قبض (${col.paymentMethod})`,
+      category: category,
+      status: "COLLECTED",
+      description: desc + (col.adminFeeAmount ? ` (شامل رسوم إدارية ${col.adminFeeAmount} درهم)` : ""),
       debit: 0,
       credit: col.amountEntered,
       sourceEntityId: colId,
     });
   }
 
-  // 5. Adjustments
+  // 5. Cheque Installments & PDC Status Monitoring
+  for (const chq of (data.cheques || [])) {
+    if (!chq || chq.tenantId !== tenantId) continue;
+    if (filters.leaseId && chq.leaseId !== filters.leaseId) continue;
+
+    if (chq.status === "POST_DATED" || chq.status === "PENDING" || chq.status === "DEPOSITED") {
+      totalPdcPending += chq.amount || 0;
+    }
+  }
+
+  // 6. Adjustments
   for (const adj of (data.adjustments || [])) {
     if (!adj || adj.targetEntityType !== "TENANT" || adj.targetEntityId !== tenantId) continue;
     const adjId = adj.id || "adj";
@@ -1395,6 +1459,8 @@ export function generateTenantStatement(
       date: adj.effectiveDate || createdDate,
       reference: adj.adjustmentNumber,
       eventType: "ADJUSTMENT",
+      category: "ADJUSTMENT",
+      status: "CLEARED",
       description: `تسوية مالية للمستأجر: ${adj.reason}`,
       debit: adj.adjustmentType === "DEBIT" ? adj.amount : 0,
       credit: adj.adjustmentType === "CREDIT" || adj.adjustmentType === "DISCOUNT" || adj.adjustmentType === "WAIVER" ? adj.amount : 0,
@@ -1434,6 +1500,8 @@ export function generateTenantStatement(
         date: item.date,
         reference: item.reference,
         eventType: item.eventType,
+        category: item.category,
+        status: item.status,
         description: item.description,
         propertyName: item.propertyName,
         unitNumber: item.unitNumber,
@@ -1458,6 +1526,12 @@ export function generateTenantStatement(
     totalDebits,
     totalCredits,
     closingBalance,
+    contractRentalValue,
+    totalCollectedRent,
+    totalPdcPending,
+    totalAdminFees,
+    totalAttestationFees,
+    totalOtherFees,
     transactions: periodTransactions,
     generatedAt: new Date().toISOString(),
   };
