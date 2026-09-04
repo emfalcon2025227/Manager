@@ -97,10 +97,10 @@ function isAuthError(err: any): boolean {
 }
 
 // Resilient helper to try models in sequence
-const AI_DOCUMENT_MODEL = "gemini-3.7-flash";
+const AI_DOCUMENT_MODEL = "gemini-flash-latest";
 const AI_DOCUMENT_FALLBACK_MODELS = [
-  "gemini-3.5-flash-lite",
-  "gemini-flash-latest",
+  "gemini-3.1-flash-lite",
+  "gemini-3.1-pro-preview",
 ];
 
 async function generateContentWithFallback(ai: GoogleGenAI, requestParams: {
@@ -1078,13 +1078,13 @@ async function processOcrRequest(ai: any, documentType: string, cleanBase64: str
   let responseSchema: any = null;
 
   // Determine model hierarchy based on profile & model level
-  let modelSequence: string[] = ["gemini-3.7-flash", "gemini-3.5-flash-lite", "gemini-flash-latest"];
+  let modelSequence: string[] = ["gemini-flash-latest", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview"];
   if (modelLevel === "forensic" || documentType === "CHEQUE") {
-    modelSequence = ["gemini-3.7-flash", "gemini-3.5-flash-lite", "gemini-flash-latest"];
+    modelSequence = ["gemini-flash-latest", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview"];
   } else if (modelLevel === "fast") {
-    modelSequence = ["gemini-3.5-flash-lite", "gemini-3.7-flash", "gemini-flash-latest"];
+    modelSequence = ["gemini-3.1-flash-lite", "gemini-flash-latest", "gemini-3.1-pro-preview"];
   } else {
-    modelSequence = ["gemini-3.7-flash", "gemini-3.5-flash-lite", "gemini-flash-latest"];
+    modelSequence = ["gemini-flash-latest", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview"];
   }
 
   if (documentType === "CHEQUE") {
@@ -1312,9 +1312,14 @@ function parseChequeFromText(text: string) {
     rawNotes: "Local Tesseract Forensic OCR Extraction"
   };
 
+  // Convert eastern arabic numerals (٠١٢٣٤٥٦٧٨٩) to standard western digits (0-9)
+  const normalizedText = text.replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660));
+
   // 1. Cheque Number (6 digits or MICR)
-  const micrMatch = text.match(/⑈?(\d{6})⑈?/);
-  const numMatch = text.match(/CHEQUE\s*(?:NO|NUMBER)?[:.\s]*(\d{6,8})/i) || text.match(/\b(\d{6})\b/);
+  const micrMatch = normalizedText.match(/[⑈c|:"\s](\d{6,8})[⑈c|:"\s]/) || normalizedText.match(/⑈?(\d{6})⑈?/);
+  const numMatch = normalizedText.match(/CHEQUE\s*(?:NO|NUMBER)?[:.\s]*(\d{6,8})/i) || 
+                   normalizedText.match(/CHQ[:.\s]*(\d{6,8})/i) ||
+                   normalizedText.match(/\b(\d{6})\b/);
   if (micrMatch) {
     res.chequeNumber = micrMatch[1];
   } else if (numMatch) {
@@ -1339,15 +1344,16 @@ function parseChequeFromText(text: string) {
   ];
 
   for (const b of uaeBanks) {
-    if (b.keywords.some(k => new RegExp(k, "i").test(text))) {
+    if (b.keywords.some(k => new RegExp(k, "i").test(normalizedText))) {
       res.bankName = b.name;
       break;
     }
   }
 
   // 3. Amount
-  const amountMatch = text.match(/(?:AED|Dhs|درهم)\s*([0-9,]+(?:\.[0-9]{2})?)/i) || 
-                      text.match(/([0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]{2})?)/);
+  const amountMatch = normalizedText.match(/(?:AED|Dhs|DHS|درهم)[*#\s]*([0-9,]+(?:\.[0-9]{2})?)/i) || 
+                      normalizedText.match(/[*#\s]*([0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]{2})?)/) ||
+                      normalizedText.match(/\b([1-9][0-9]{3,7}(?:\.[0-9]{2})?)\b/);
   if (amountMatch) {
     const rawVal = parseFloat(amountMatch[1].replace(/,/g, ""));
     if (!isNaN(rawVal) && rawVal > 0) {
@@ -1357,9 +1363,15 @@ function parseChequeFromText(text: string) {
   }
 
   // 4. Cheque Date
-  const dateMatch = text.match(/(\d{2})[/-](\d{2})[/-](\d{4})/);
+  const dateMatch = normalizedText.match(/(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})/) ||
+                    normalizedText.match(/(\d{4})[\/\-\.](\d{1,2})[\/\-\.](\d{1,2})/);
   if (dateMatch) {
-    const isoDate = `${dateMatch[3]}-${dateMatch[2]}-${dateMatch[1]}`;
+    let isoDate = "";
+    if (dateMatch[1].length === 4) {
+      isoDate = `${dateMatch[1]}-${dateMatch[2].padStart(2, "0")}-${dateMatch[3].padStart(2, "0")}`;
+    } else {
+      isoDate = `${dateMatch[3]}-${dateMatch[2].padStart(2, "0")}-${dateMatch[1].padStart(2, "0")}`;
+    }
     res.chequeDate = isoDate;
     res.dueDate = isoDate;
   }

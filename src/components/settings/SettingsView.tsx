@@ -52,6 +52,10 @@ export const SettingsView: React.FC = () => {
       outstandingAmountWeight: 25,
       delayDaysWeight: 10,
       casesFiledWeight: 5,
+      lowThreshold: 30,
+      mediumThreshold: 70,
+      highThreshold: 100,
+      blockRenewalOnHighRisk: false,
     }
   );
   const [saveFeedback, setSaveFeedback] = useState<string | null>(null);

@@ -36,6 +36,8 @@ import { CloseBackButton } from "../common/CloseBackButton";
 import { OfficePrintHeader } from "../common/OfficePrintHeader";
 import { DocumentScanner } from "../common/DocumentScanner";
 import { Unit, Property, Lease, Tenant, Owner, Cheque, CollectionRecord, MaintenanceRequest, RentalCase, DocumentCategory } from "../../types";
+import { getUnitEffectiveOccupancy } from "../../utils/unitOccupancyGovernance";
+import { UnitOccupancyAnalytics } from "./UnitOccupancyAnalytics";
 
 interface Unit360WorkspaceProps {
   unitId: string;
@@ -71,14 +73,14 @@ export const Unit360Workspace: React.FC<Unit360WorkspaceProps> = ({
   } = useData();
 
   const [activeTab, setActiveTab] = useState<
-    "overview" | "tenants" | "leases" | "cheques" | "payments" | "maintenance" | "documents" | "cases" | "timeline"
+    "overview" | "analytics" | "tenants" | "leases" | "cheques" | "payments" | "maintenance" | "documents" | "cases" | "timeline"
   >("overview");
 
   const [isScannerOpen, setIsScannerOpen] = useState<boolean>(false);
 
-  // Target Unit
+  // Target Unit (Strict search by ID)
   const unit = useMemo(() => {
-    return units.find((u) => u.id === unitId) || units[0];
+    return units.find((u) => u.id === unitId) || null;
   }, [units, unitId]);
 
   // Target Property
@@ -93,49 +95,62 @@ export const Unit360Workspace: React.FC<Unit360WorkspaceProps> = ({
     return owners.find((o) => o.id === property.ownerId) || null;
   }, [owners, property]);
 
-  // Linked Leases (sorted by date descending)
+  // Authoritative Unit Occupancy Governance (Single Source of Truth)
+  const occupancySummary = useMemo(() => {
+    if (!unit) return null;
+    return getUnitEffectiveOccupancy(unit.id, unit, leases);
+  }, [unit, leases]);
+
+  // Linked Leases (Strictly for this specific unit, sorted by date descending)
   const unitLeases = useMemo(() => {
     if (!unit) return [];
     return leases
-      .filter((l) => l.unitId === unit.id || l.propertyId === unit.propertyId)
-      .sort((a, b) => new Date(b.startDate).getTime() - new Date(a.startDate).getTime());
+      .filter((l) => l.unitId === unit.id)
+      .sort((a, b) => new Date(b.startDate || b.createdAt || 0).getTime() - new Date(a.startDate || a.createdAt || 0).getTime());
   }, [leases, unit]);
 
-  // Current Active Lease
+  // Current Active Occupying Lease (Only if active/occupying for this unit)
   const currentLease = useMemo(() => {
-    return unitLeases.find((l) => l.contractStatus === "ACTIVE") || unitLeases[0] || null;
-  }, [unitLeases]);
-
-  // Current Tenant
-  const currentTenant = useMemo(() => {
-    if (unit?.currentTenantId) {
-      return tenants.find((t) => t.id === unit.currentTenantId) || null;
-    }
-    if (currentLease?.tenantId) {
-      return tenants.find((t) => t.id === currentLease.tenantId) || null;
+    if (occupancySummary?.activeLease) {
+      return occupancySummary.activeLease;
     }
     return null;
-  }, [tenants, unit, currentLease]);
+  }, [occupancySummary]);
 
-  // Past Leases
+  // Current Tenant (Strictly for this unit based on occupying lease or authoritative status)
+  const currentTenant = useMemo(() => {
+    if (!unit) return null;
+    if (occupancySummary?.activeLease?.tenantId) {
+      return tenants.find((t) => t.id === occupancySummary.activeLease!.tenantId) || null;
+    }
+    if ((unit.status === "OCCUPIED" || occupancySummary?.effectiveStatus === "OCCUPIED") && unit.currentTenantId) {
+      return tenants.find((t) => t.id === unit.currentTenantId) || null;
+    }
+    return null;
+  }, [tenants, unit, occupancySummary]);
+
+  // Past Leases for this unit
   const pastLeases = useMemo(() => {
-    return unitLeases.filter((l) => l.id !== currentLease?.id);
+    if (!currentLease) return unitLeases;
+    return unitLeases.filter((l) => l.id !== currentLease.id);
   }, [unitLeases, currentLease]);
 
-  // Linked Cheques
+  // Linked Cheques (All cheques associated with this unit or its leases)
   const unitCheques = useMemo(() => {
-    if (!currentLease) return [];
-    return cheques.filter((c) => c.leaseId === currentLease.id || c.unitId === unit?.id);
-  }, [cheques, currentLease, unit]);
+    if (!unit) return [];
+    const unitLeaseIds = new Set(unitLeases.map((l) => l.id));
+    return cheques.filter((c) => (c.unitId && c.unitId === unit.id) || (c.leaseId && unitLeaseIds.has(c.leaseId)));
+  }, [cheques, unitLeases, unit]);
 
-  // Linked Payments
+  // Linked Payments (All payments linked to this unit's cheques)
   const unitPayments = useMemo(() => {
     if (!unit) return [];
+    const unitChequeIds = new Set(unitCheques.map((c) => c.id));
     return collections.filter((c) => {
-      const linkedCheque = cheques.find((ch) => ch.id === c.chequeId);
-      return linkedCheque?.unitId === unit.id || (currentLease && linkedCheque?.leaseId === currentLease.id);
+      if (c.chequeId && unitChequeIds.has(c.chequeId)) return true;
+      return false;
     });
-  }, [collections, unit, currentLease, cheques]);
+  }, [collections, unit, unitCheques]);
 
   // Linked Maintenance
   const unitMaintenance = useMemo(() => {
@@ -143,29 +158,35 @@ export const Unit360Workspace: React.FC<Unit360WorkspaceProps> = ({
     return maintenanceRequests.filter((m) => m.unitId === unit.id);
   }, [maintenanceRequests, unit]);
 
-  // Linked Cases
+  // Linked Cases (Strictly for this unit or its leases)
   const unitCases = useMemo(() => {
     if (!unit) return [];
-    return cases.filter((c) => c.unitId === unit.id || (currentLease && c.leaseId === currentLease.id));
-  }, [cases, unit, currentLease]);
+    const unitLeaseIds = new Set(unitLeases.map((l) => l.id));
+    return cases.filter((c) => c.unitId === unit.id || (c.leaseId && unitLeaseIds.has(c.leaseId)));
+  }, [cases, unit, unitLeases]);
+
+  // Effective authoritative status
+  const effectiveStatus = occupancySummary?.effectiveStatus || unit?.status || "VACANT";
 
   // Vacancy Intelligence calculations
   const vacancyInfo = useMemo(() => {
-    const isOccupied = unit?.status === "OCCUPIED" || !!currentTenant;
-    const vacancyStartDate = currentLease ? currentLease.endDate : "2026-01-01";
+    const isOccupied = effectiveStatus === "OCCUPIED" && !!currentTenant;
+    const lastEndedLease = pastLeases.find((l) => l.endDate);
+    const vacancyStartDate = currentLease ? currentLease.endDate : lastEndedLease?.endDate || "2026-01-01";
     const diffMs = Math.max(0, Date.now() - new Date(vacancyStartDate).getTime());
     const vacancyDays = isOccupied ? 0 : Math.floor(diffMs / (1000 * 60 * 60 * 24));
-    const previousRent = pastLeases[0]?.annualRent || unit?.annualRent || 50000;
+    const previousRent = lastEndedLease?.annualRent || unit?.annualRent || 50000;
     const estimatedLostRevenue = isOccupied ? 0 : Math.round((previousRent / 365) * vacancyDays);
 
     return {
       isOccupied,
+      effectiveStatus,
       vacancyStartDate,
       vacancyDays,
       previousRent,
       estimatedLostRevenue,
     };
-  }, [unit, currentTenant, currentLease, pastLeases]);
+  }, [unit, currentTenant, currentLease, pastLeases, effectiveStatus]);
 
   // Print handler
   const handlePrint = () => {
@@ -210,7 +231,7 @@ export const Unit360Workspace: React.FC<Unit360WorkspaceProps> = ({
         subtitleEn={`Property: ${property ? (isAr ? property.nameEn : property.nameAr) : "---"} | Owner: ${owner ? (isAr ? owner.nameEn : owner.nameAr) : "---"}`}
         hideOnScreen={true}
         extraInfo={[
-          { labelAr: "الحالة", labelEn: "Status", value: unit.status },
+          { labelAr: "الحالة", labelEn: "Status", value: effectiveStatus === "OCCUPIED" ? (isAr ? "مؤجرة" : "OCCUPIED") : effectiveStatus === "VACANT" ? (isAr ? "شاغرة" : "VACANT") : effectiveStatus },
           { labelAr: "الإيجار السنوي", labelEn: "Annual Rent", value: `AED ${(unit.annualRent || 0).toLocaleString()}` },
           { labelAr: "المستأجر الحالي", labelEn: "Tenant", value: currentTenant ? (isAr ? currentTenant.nameAr : currentTenant.nameEn) : (isAr ? "شاغرة" : "Vacant") },
         ]}
@@ -232,14 +253,24 @@ export const Unit360Workspace: React.FC<Unit360WorkspaceProps> = ({
             <span className="text-white">{isAr ? `وحدة رقم ${unit.unitNumber}` : `Unit #${unit.unitNumber}`}</span>
             <span
               className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase ${
-                unit.status === "OCCUPIED"
+                effectiveStatus === "OCCUPIED"
                   ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
-                  : unit.status === "MAINTENANCE"
+                  : effectiveStatus === "MAINTENANCE"
                   ? "bg-amber-500/20 text-amber-300 border border-amber-500/30"
+                  : effectiveStatus === "RESERVED"
+                  ? "bg-blue-500/20 text-blue-300 border border-blue-500/30"
                   : "bg-slate-700 text-slate-300"
               }`}
             >
-              {unit.status}
+              {effectiveStatus === "OCCUPIED"
+                ? isAr ? "🟢 مؤجرة" : "OCCUPIED"
+                : effectiveStatus === "VACANT"
+                ? isAr ? "🟢 شاغرة" : "VACANT"
+                : effectiveStatus === "MAINTENANCE"
+                ? isAr ? "🟡 قيد الصيانة" : "MAINTENANCE"
+                : effectiveStatus === "RESERVED"
+                ? isAr ? "🔵 محجوزة" : "RESERVED"
+                : effectiveStatus}
             </span>
           </div>
           <h1 className="text-xl sm:text-2xl font-black flex items-center gap-2.5">
@@ -272,10 +303,26 @@ export const Unit360Workspace: React.FC<Unit360WorkspaceProps> = ({
         </div>
       </div>
 
+      {/* Occupancy Mismatch / Governance Alert */}
+      {occupancySummary?.isMismatch && (
+        <div className="bg-amber-500/10 border border-amber-500/30 text-amber-900 dark:text-amber-200 p-4 rounded-2xl text-xs flex items-start gap-3">
+          <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+          <div className="space-y-1">
+            <div className="font-bold">
+              {isAr ? "تنبيه حوكمة حالة الوحدة والعقد:" : "Unit Occupancy Governance Notice:"}
+            </div>
+            <div>
+              {isAr ? occupancySummary.reasonAr : occupancySummary.reasonEn}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Synchronized Unit Tabs */}
       <div className="flex items-center gap-1.5 overflow-x-auto pb-2 scrollbar-thin border-b border-slate-200 dark:border-slate-800">
         {[
           { id: "overview", labelAr: "نظرة عامة والشاغر", labelEn: "Overview & Vacancy", icon: Home, count: null },
+          { id: "analytics", labelAr: "تحليلات الإشغال والعقود", labelEn: "Occupancy & Leases", icon: TrendingUp, count: unitLeases.length },
           { id: "tenants", labelAr: "المستأجرون", labelEn: "Tenants", icon: Users, count: currentTenant ? 1 : 0 },
           { id: "leases", labelAr: "سجل العقود", labelEn: "Lease History", icon: FileText, count: unitLeases.length },
           { id: "cheques", labelAr: "الشيكات", labelEn: "Cheques", icon: DollarSign, count: unitCheques.length },
@@ -328,16 +375,30 @@ export const Unit360Workspace: React.FC<Unit360WorkspaceProps> = ({
               <span className="text-xs font-bold text-slate-500">{isAr ? "حالة الإشغال" : "Occupancy Status"}</span>
               <div
                 className={`text-2xl font-black mt-1 ${
-                  vacancyInfo.isOccupied ? "text-emerald-600" : "text-amber-600"
+                  vacancyInfo.effectiveStatus === "OCCUPIED"
+                    ? "text-emerald-600"
+                    : vacancyInfo.effectiveStatus === "MAINTENANCE"
+                    ? "text-amber-600"
+                    : vacancyInfo.effectiveStatus === "RESERVED"
+                    ? "text-blue-600"
+                    : "text-slate-600 dark:text-slate-300"
                 }`}
               >
-                {vacancyInfo.isOccupied ? (isAr ? "مشغولة" : "Occupied") : isAr ? "شاغرة" : "Vacant"}
+                {vacancyInfo.effectiveStatus === "OCCUPIED"
+                  ? isAr ? "مؤجرة" : "Occupied"
+                  : vacancyInfo.effectiveStatus === "VACANT"
+                  ? isAr ? "شاغرة" : "Vacant"
+                  : vacancyInfo.effectiveStatus === "MAINTENANCE"
+                  ? isAr ? "قيد الصيانة" : "Under Maintenance"
+                  : vacancyInfo.effectiveStatus === "RESERVED"
+                  ? isAr ? "محجوزة" : "Reserved"
+                  : vacancyInfo.effectiveStatus}
               </div>
               <div className="text-[11px] text-slate-400 mt-1">
-                {vacancyInfo.isOccupied
+                {vacancyInfo.effectiveStatus === "OCCUPIED"
                   ? isAr
                     ? `مؤجرة للمستأجر: ${currentTenant ? (isAr ? currentTenant.nameAr : currentTenant.nameEn) : "---"}`
-                    : `Occupied by: ${currentTenant?.nameEn || "---"}`
+                    : `Occupied by: ${currentTenant?.nameEn || currentTenant?.nameAr || "---"}`
                   : `${vacancyInfo.vacancyDays} ${isAr ? "أيام شغور" : "days vacant"}`}
               </div>
             </div>
@@ -464,10 +525,30 @@ export const Unit360Workspace: React.FC<Unit360WorkspaceProps> = ({
               )}
             </div>
           </div>
+
+          {/* Integrated Interactive Occupancy & Historical Lease Analytics Component */}
+          <UnitOccupancyAnalytics
+            unit={unit}
+            leases={leases}
+            tenants={tenants}
+            cheques={cheques}
+            collections={collections}
+          />
         </div>
       )}
 
-      {/* 2. CHEQUES TAB */}
+      {/* 2. DEDICATED ANALYTICS TAB */}
+      {activeTab === "analytics" && (
+        <UnitOccupancyAnalytics
+          unit={unit}
+          leases={leases}
+          tenants={tenants}
+          cheques={cheques}
+          collections={collections}
+        />
+      )}
+
+      {/* 3. CHEQUES TAB */}
       {activeTab === "cheques" && (
         <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-4">
           <h3 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2">

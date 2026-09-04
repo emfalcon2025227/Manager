@@ -41,6 +41,7 @@ import { CloseBackButton } from "../common/CloseBackButton";
 import { OfficePrintHeader } from "../common/OfficePrintHeader";
 import { DocumentScanner } from "../common/DocumentScanner";
 import { Property, Unit, Lease, Tenant, Owner, Cheque, CollectionRecord, PropertyExpenseRecord, MaintenanceRequest, RentalCase, AuditLogEntry, OperationalDocumentRecord, OperationalTask, OperationalCommunicationRecord, DocumentCategory } from "../../types";
+import { PropertyOccupancyAnalytics } from "./PropertyOccupancyAnalytics";
 
 interface Property360WorkspaceProps {
   propertyId: string;
@@ -82,6 +83,7 @@ export const Property360Workspace: React.FC<Property360WorkspaceProps> = ({
   // Active Tab state
   const [activeTab, setActiveTab] = useState<
     | "overview"
+    | "analytics"
     | "units"
     | "owners"
     | "tenants"
@@ -284,6 +286,7 @@ export const Property360Workspace: React.FC<Property360WorkspaceProps> = ({
   // Tab definitions
   const tabs = [
     { id: "overview", labelAr: "نظرة عامة", labelEn: "Overview", icon: Building2, count: null },
+    { id: "analytics", labelAr: "تحليلات الإشغال والعقود", labelEn: "Occupancy & Leases", icon: TrendingUp, count: propertyUnits.length },
     { id: "units", labelAr: "الوحدات الإيجارية", labelEn: "Units", icon: Home, count: propertyUnits.length },
     { id: "owners", labelAr: "الملاك", labelEn: "Owners", icon: UserCheck, count: propertyOwner ? 1 : 0 },
     { id: "tenants", labelAr: "المستأجرون", labelEn: "Tenants", icon: Users, count: propertyTenants.length },
@@ -569,10 +572,34 @@ export const Property360Workspace: React.FC<Property360WorkspaceProps> = ({
               )}
             </div>
           </div>
+
+          {/* Interactive Property & Unit Occupancy / Lease Analytics Component */}
+          <PropertyOccupancyAnalytics
+            property={property}
+            units={units}
+            leases={leases}
+            tenants={tenants}
+            cheques={cheques}
+            collections={collections}
+            onNavigateToUnit={onNavigateToUnit}
+          />
         </div>
       )}
 
-      {/* 2. UNITS TAB */}
+      {/* 2. DEDICATED ANALYTICS TAB */}
+      {activeTab === "analytics" && (
+        <PropertyOccupancyAnalytics
+          property={property}
+          units={units}
+          leases={leases}
+          tenants={tenants}
+          cheques={cheques}
+          collections={collections}
+          onNavigateToUnit={onNavigateToUnit}
+        />
+      )}
+
+      {/* 3. UNITS TAB */}
       {activeTab === "units" && (
         <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -615,45 +642,58 @@ export const Property360Workspace: React.FC<Property360WorkspaceProps> = ({
                       u.unitNumber.toLowerCase().includes(unitSearch.toLowerCase()) ||
                       (u.currentTenantId && u.currentTenantId.toLowerCase().includes(unitSearch.toLowerCase()))
                   )
-                  .map((unit) => (
-                    <tr key={unit.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/50 transition">
-                      <td className="px-4 py-3 font-bold text-slate-900 dark:text-white font-mono">
-                        {unit.unitNumber}
-                      </td>
-                      <td className="px-4 py-3 text-slate-600 dark:text-slate-400">{unit.type || "Apartment"}</td>
-                      <td className="px-4 py-3 text-slate-600 dark:text-slate-400">{unit.floor || 1}</td>
-                      <td className="px-4 py-3 font-mono text-slate-600 dark:text-slate-400">{unit.areaSqFt || 1200}</td>
-                      <td className="px-4 py-3">
-                        <span
-                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                            unit.status === "OCCUPIED"
-                              ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
-                              : unit.status === "MAINTENANCE"
-                              ? "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300"
-                              : "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300"
-                          }`}
-                        >
-                          {unit.status}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 font-medium text-slate-900 dark:text-white">
-                        {unit.currentTenantId || (isAr ? "شاغرة" : "Vacant")}
-                      </td>
-                      <td className="px-4 py-3 text-right font-mono font-bold text-indigo-600 whitespace-nowrap">
-                        {(unit.annualRent || 0).toLocaleString()} AED
-                      </td>
-                      <td className="px-4 py-3 text-center">
-                        {onNavigateToUnit && (
-                          <button
-                            onClick={() => onNavigateToUnit(unit.id)}
-                            className="px-2.5 py-1 text-[11px] font-bold text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-950 rounded-lg transition"
+                  .map((unit) => {
+                    const tenantObj = unit.currentTenantId ? tenants.find((t) => t.id === unit.currentTenantId) : null;
+                    return (
+                      <tr key={unit.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/50 transition">
+                        <td className="px-4 py-3 font-bold text-slate-900 dark:text-white font-mono">
+                          {unit.unitNumber}
+                        </td>
+                        <td className="px-4 py-3 text-slate-600 dark:text-slate-400">{unit.type || "Apartment"}</td>
+                        <td className="px-4 py-3 text-slate-600 dark:text-slate-400">{unit.floor || 1}</td>
+                        <td className="px-4 py-3 font-mono text-slate-600 dark:text-slate-400">{unit.areaSqFt || 1200}</td>
+                        <td className="px-4 py-3">
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                              unit.status === "OCCUPIED"
+                                ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
+                                : unit.status === "MAINTENANCE"
+                                ? "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300"
+                                : unit.status === "RESERVED"
+                                ? "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300"
+                                : "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300"
+                            }`}
                           >
-                            {isAr ? "عرض الوحدة 360" : "Unit 360"}
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
+                            {unit.status === "OCCUPIED"
+                              ? isAr ? "مؤجرة" : "OCCUPIED"
+                              : unit.status === "VACANT"
+                              ? isAr ? "شاغرة" : "VACANT"
+                              : unit.status === "MAINTENANCE"
+                              ? isAr ? "قيد الصيانة" : "MAINTENANCE"
+                              : unit.status === "RESERVED"
+                              ? isAr ? "محجوزة" : "RESERVED"
+                              : unit.status}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 font-medium text-slate-900 dark:text-white">
+                          {tenantObj ? (isAr ? tenantObj.nameAr : tenantObj.nameEn) : isAr ? "شاغرة" : "Vacant"}
+                        </td>
+                        <td className="px-4 py-3 text-right font-mono font-bold text-indigo-600 whitespace-nowrap">
+                          {(unit.annualRent || 0).toLocaleString()} AED
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          {onNavigateToUnit && (
+                            <button
+                              onClick={() => onNavigateToUnit(unit.id)}
+                              className="px-2.5 py-1 text-[11px] font-bold text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-950 rounded-lg transition"
+                            >
+                              {isAr ? "عرض الوحدة 360" : "Unit 360"}
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
               </tbody>
             </table>
           </div>

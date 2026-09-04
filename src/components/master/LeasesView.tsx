@@ -1,5 +1,5 @@
 import React, { useState, useRef } from "react";
-import { Plus, Search, FileSpreadsheet, AlertTriangle, CheckCircle2, RotateCw, Calendar, Building, User, Trash2, Edit2, Sparkles, Upload, FileText, X, ExternalLink, DollarSign, Ban } from "lucide-react";
+import { Plus, Search, FileSpreadsheet, AlertTriangle, CheckCircle2, RotateCw, Calendar, Building, User, Trash2, Edit2, Sparkles, Upload, FileText, X, ExternalLink, DollarSign, Ban, Eye } from "lucide-react";
 import { useLanguage } from "../../context/LanguageContext";
 import { useData, isOccupyingLeaseStatus } from "../../context/DataContext";
 import { useAuth } from "../../context/AuthContext";
@@ -9,6 +9,7 @@ import { Badge } from "../common/Badge";
 import { SearchableSelect, SearchableOption } from "../common/SearchableSelect";
 import { ConfirmDeleteModal } from "../common/ConfirmDeleteModal";
 import { LeaseWorkspacePage } from "./LeaseWorkspaceModal";
+import { Lease360Workspace } from "./Lease360Workspace";
 import { LeaseEditorModal } from "./LeaseEditorModal";
 import { LeaseRenewalsTab } from "../leases/LeaseRenewalsTab";
 import { DeferredPaymentsTab } from "../leases/DeferredPaymentsTab";
@@ -66,6 +67,7 @@ export const LeasesView: React.FC<LeasesViewProps> = ({ onNavigateToRenewLease }
   const [renewalNoticeLease, setRenewalNoticeLease] = useState<Lease | null>(null);
   const [terminatingLease, setTerminatingLease] = useState<Lease | null>(null);
   const [selectedWorkspaceLease, setSelectedWorkspaceLease] = useState<Lease | null>(null);
+  const [selected360LeaseId, setSelected360LeaseId] = useState<string | null>(null);
 
   // Form State for Add / Edit
   const [leaseNumber, setLeaseNumber] = useState("");
@@ -304,6 +306,19 @@ export const LeasesView: React.FC<LeasesViewProps> = ({ onNavigateToRenewLease }
     setIsConfirmSaveOpen(false);
     setIsAddEditModalOpen(false);
   };
+
+  if (selected360LeaseId) {
+    return (
+      <Lease360Workspace
+        leaseId={selected360LeaseId}
+        onClose={() => setSelected360LeaseId(null)}
+        onOpenRenew={(l) => {
+          setSelected360LeaseId(null);
+          handleOpenRenew(l);
+        }}
+      />
+    );
+  }
 
   if (selectedWorkspaceLease) {
     return (
@@ -578,12 +593,12 @@ export const LeasesView: React.FC<LeasesViewProps> = ({ onNavigateToRenewLease }
                     <td className="py-3 px-4 text-end">
                       <div className="flex items-center justify-end gap-1">
                         <button
-                          onClick={() => setSelectedWorkspaceLease(lease)}
-                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-bold text-amber-900 bg-amber-100 hover:bg-amber-200 border border-amber-300 transition-colors cursor-pointer"
-                          title={language === "ar" ? "مساحة عمل العقد المتكاملة" : "Contract Master Workspace"}
+                          onClick={() => setSelected360LeaseId(lease.id)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-bold text-indigo-900 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200/80 transition-colors cursor-pointer"
+                          title={language === "ar" ? "الملف الشامل للعقد 360" : "Lease 360 Dossier"}
                         >
-                          <FileText className="w-3.5 h-3.5 text-amber-800" />
-                          <span>{language === "ar" ? "المساحة" : "Workspace"}</span>
+                          <Eye className="w-3.5 h-3.5 text-indigo-700" />
+                          <span>360</span>
                         </button>
                         <button
                           onClick={(e) => handleOpenEdit(lease, e)}

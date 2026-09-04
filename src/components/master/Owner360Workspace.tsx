@@ -25,6 +25,7 @@ import {
   CheckCircle2,
   Calendar,
   CreditCard,
+  TrendingUp,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { useData } from "../../context/DataContext";
@@ -33,6 +34,7 @@ import { CloseBackButton } from "../common/CloseBackButton";
 import { OfficePrintHeader } from "../common/OfficePrintHeader";
 import { Owner, Property, Unit, Lease, Tenant, CollectionRecord, PropertyExpenseRecord, OwnerTransferRecord, CommissionObligation } from "../../types";
 import { computeOwnerPayableDetails } from "../../services/financialEngine";
+import { OwnerOccupancyAnalytics } from "./OwnerOccupancyAnalytics";
 
 interface Owner360WorkspaceProps {
   ownerId: string;
@@ -73,6 +75,7 @@ export const Owner360Workspace: React.FC<Owner360WorkspaceProps> = ({
 
   const [activeTab, setActiveTab] = useState<
     | "overview"
+    | "analytics"
     | "properties"
     | "units"
     | "leases"
@@ -286,6 +289,7 @@ export const Owner360Workspace: React.FC<Owner360WorkspaceProps> = ({
       <div className="flex items-center gap-1.5 overflow-x-auto pb-2 scrollbar-thin border-b border-slate-200 dark:border-slate-800">
         {[
           { id: "overview", labelAr: "نظرة عامة ومستحقات", labelEn: "Overview & Balance", icon: UserCheck, count: null },
+          { id: "analytics", labelAr: "تحليلات الإشغال والعقود", labelEn: "Occupancy & Leases", icon: TrendingUp, count: ownerUnits.length },
           { id: "properties", labelAr: "العقارات", labelEn: "Properties", icon: Building2, count: ownerProperties.length },
           { id: "units", labelAr: "الوحدات الإيجارية", labelEn: "Units", icon: Home, count: ownerUnits.length },
           { id: "leases", labelAr: "العقود", labelEn: "Leases", icon: FileText, count: ownerLeases.length },
@@ -448,10 +452,36 @@ export const Owner360Workspace: React.FC<Owner360WorkspaceProps> = ({
               </div>
             </div>
           </div>
+
+          {/* Interactive Owner Portfolio Occupancy & Lease Analytics Component */}
+          <OwnerOccupancyAnalytics
+            owner={owner}
+            properties={properties}
+            units={units}
+            leases={leases}
+            tenants={tenants}
+            cheques={cheques}
+            collections={collections}
+            onNavigateToUnit={onNavigateToUnit}
+          />
         </div>
       )}
 
-      {/* 2. PROPERTIES TAB */}
+      {/* 2. DEDICATED ANALYTICS TAB */}
+      {activeTab === "analytics" && (
+        <OwnerOccupancyAnalytics
+          owner={owner}
+          properties={properties}
+          units={units}
+          leases={leases}
+          tenants={tenants}
+          cheques={cheques}
+          collections={collections}
+          onNavigateToUnit={onNavigateToUnit}
+        />
+      )}
+
+      {/* 3. PROPERTIES TAB */}
       {activeTab === "properties" && (
         <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-4">
           <h3 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2">

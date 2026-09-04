@@ -280,7 +280,38 @@ export const ROLE_PERMISSIONS: Record<UserRole, (Permission | string)[]> = {
   TENANT: [
     "TENANT_VIEW_OWN_DATA",
     "CREATE_MAINTENANCE"
+  ],
+  OWNER: [
+    "OWNER_VIEW_OWN_DATA",
+    "PROPERTIES.VIEW",
+    "UNITS.VIEW",
+    "LEASES.VIEW",
+    "CHEQUES.VIEW",
+    "COLLECTIONS.VIEW"
+  ],
+  PROPERTY_OWNER: [
+    "OWNER_VIEW_OWN_DATA",
+    "PROPERTIES.VIEW",
+    "UNITS.VIEW",
+    "LEASES.VIEW",
+    "CHEQUES.VIEW",
+    "COLLECTIONS.VIEW"
   ]
+};
+
+export const INITIAL_OWNER_USER: User = {
+  id: "usr-owner-mahmoud",
+  username: "owner_mahmoud",
+  email: "owner@falcon.ae",
+  nameEn: "Mahmoud Mohamed Mahmoud Hamed (Owner)",
+  nameAr: "محمود محمد محمود حامد (مالك)",
+  role: "OWNER",
+  ownerId: "own-mahmoud",
+  phone: "+971501234567",
+  isActive: true,
+  createdAt: "2024-01-01T08:00:00Z",
+  lastLogin: new Date().toISOString(),
+  password: "owner@123",
 };
 
 export const INITIAL_SYSTEM_OWNER: User = {
@@ -421,8 +452,8 @@ interface AuthContextType {
   canRemixAndShare: boolean;
   users: User[];
   userPermissionOverrides: UserPermissionOverride[];
-  loginMode: "STAFF" | "TENANT" | null;
-  login: (usernameOrEmail: string, password: string, mode: "STAFF" | "TENANT") => Promise<{ success: boolean; error?: string }>;
+  loginMode: "STAFF" | "TENANT" | "OWNER" | null;
+  login: (usernameOrEmail: string, password: string, mode: "STAFF" | "TENANT" | "OWNER") => Promise<{ success: boolean; error?: string }>;
   logout: () => void;
   quickSwitchUser: (userId: string) => void;
   hasPermission: (permission: Permission | string, targetUserId?: string) => boolean;
@@ -471,6 +502,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         password: u.password || "mahmoud@123"
       } : u);
     }
+
+    // Ensure demo owner account exists
+    const hasOwner = loadedUsers.some(u => u.id === INITIAL_OWNER_USER.id || u.role === "OWNER" || u.role === "PROPERTY_OWNER");
+    if (!hasOwner) {
+      loadedUsers = [...loadedUsers, INITIAL_OWNER_USER];
+    }
+
     return loadedUsers;
   });
 
@@ -495,8 +533,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return null;
   });
 
-  const [loginMode, setLoginMode] = useState<"STAFF" | "TENANT" | null>(() => {
-    return localStorage.getItem("ef_login_mode") as "STAFF" | "TENANT" | null;
+  const [loginMode, setLoginMode] = useState<"STAFF" | "TENANT" | "OWNER" | null>(() => {
+    return localStorage.getItem("ef_login_mode") as "STAFF" | "TENANT" | "OWNER" | null;
   });
 
   useEffect(() => {
@@ -598,7 +636,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [loginMode]);
 
-  const login = async (usernameOrEmail: string, password: string, mode: "STAFF" | "TENANT"): Promise<{ success: boolean; error?: string }> => {
+  const login = async (usernameOrEmail: string, password: string, mode: "STAFF" | "TENANT" | "OWNER"): Promise<{ success: boolean; error?: string }> => {
     const clean = usernameOrEmail.trim().toLowerCase();
     
     const user = users.find((u) => {
@@ -609,17 +647,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       
       if (mode === "TENANT") {
         return (emailMatch || usernameMatch) && u.role === "TENANT";
+      } else if (mode === "OWNER") {
+        return (emailMatch || usernameMatch) && (u.role === "OWNER" || u.role === "PROPERTY_OWNER" || !!u.ownerId);
       } else {
-        return (emailMatch || usernameMatch) && u.role !== "TENANT";
+        return (emailMatch || usernameMatch) && u.role !== "TENANT" && u.role !== "OWNER" && u.role !== "PROPERTY_OWNER";
       }
     });
 
     if (!user) {
-      return { success: false, error: mode === "TENANT" ? "خطأ في البريد الإلكتروني أو كلمة المرور للمستأجر" : "اسم المستخدم أو كلمة المرور غير صحيحة" };
+      let errorMsg = "اسم المستخدم أو كلمة المرور غير صحيحة";
+      if (mode === "TENANT") errorMsg = "خطأ في البريد الإلكتروني أو كلمة المرور للمستأجر";
+      if (mode === "OWNER") errorMsg = "خطأ في البريد الإلكتروني أو كلمة المرور لبوابة المالك";
+      return { success: false, error: errorMsg };
     }
 
     if (user.password && user.password !== password) {
-       return { success: false, error: mode === "TENANT" ? "خطأ في البريد الإلكتروني أو كلمة المرور للمستأجر" : "اسم المستخدم أو كلمة المرور غير صحيحة" };
+      let errorMsg = "اسم المستخدم أو كلمة المرور غير صحيحة";
+      if (mode === "TENANT") errorMsg = "خطأ في البريد الإلكتروني أو كلمة المرور للمستأجر";
+      if (mode === "OWNER") errorMsg = "خطأ في البريد الإلكتروني أو كلمة المرور لبوابة المالك";
+      return { success: false, error: errorMsg };
     }
 
     if (!user.isActive) {

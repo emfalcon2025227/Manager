@@ -239,8 +239,8 @@ export class OCRService {
     const profile = OCR_PROFILES[normalizedKey] || OCR_PROFILES.GENERAL_DOCUMENT;
 
     let rawBase64 = (base64Image || "").trim();
-    if (rawBase64.includes("base64,")) {
-      rawBase64 = rawBase64.split("base64,")[1];
+    if (rawBase64.includes(",")) {
+      rawBase64 = rawBase64.substring(rawBase64.lastIndexOf(",") + 1);
     }
     rawBase64 = rawBase64.replace(/[\r\n\s]/g, "");
 

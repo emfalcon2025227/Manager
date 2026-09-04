@@ -25,6 +25,7 @@ import {
   WalletCards,
   ArrowDownLeft,
   CheckCircle2,
+  TrendingUp,
 } from "lucide-react";
 import {
   Lease,
@@ -58,6 +59,7 @@ import { getLeaseRenewalEligibility } from "../../utils/leaseRenewalRules";
 import { LeaseRenewalRuleNoticeModal } from "../common/LeaseRenewalRuleNoticeModal";
 import { isCardPayment } from "../../utils/paymentUtils"; // Added
 import { ReplaceChequeModal } from "../cheques/ReplaceChequeModal";
+import { LeaseOccupancyAnalytics } from "./LeaseOccupancyAnalytics";
 
 interface LeaseWorkspaceModalProps {
   lease: Lease | null;
@@ -932,6 +934,7 @@ export const LeaseWorkspacePage: React.FC<LeaseWorkspaceModalProps> = ({ lease: 
 
   const subSections = [
     { id: "overview-sec", label: isAr ? "نظرة عامة ومخاطر" : "Overview & Risks", icon: FileText },
+    { id: "analytics-sec", label: isAr ? "تحليلات المستأجر والإشغال" : "Tenant & Occupancy Analytics", icon: TrendingUp },
     { id: "parties-sec", label: isAr ? "أطراف العقد والوحدة" : "Parties & Unit Specs", icon: User },
     { id: "financials-sec", label: isAr ? "جدول دفعات الأقساط" : "Installment Schedule", icon: Calendar },
     { id: "payment-center-sec", label: isAr ? "مركز تحصيل السندات" : "Contract Payment Center", icon: DollarSign },
@@ -1104,6 +1107,27 @@ export const LeaseWorkspacePage: React.FC<LeaseWorkspaceModalProps> = ({ lease: 
               </Badge>
             </div>
           </div>
+        </div>
+
+        {/* SECTION 1.5: TENANT DISTRIBUTION & OCCUPANCY ANALYTICS */}
+        <div id="analytics-sec" className="space-y-4 scroll-mt-20">
+          <div className="border-b border-slate-200 pb-2 flex items-center gap-2">
+            <span className="w-1 h-4 bg-indigo-600 rounded-full"></span>
+            <h3 className="text-sm font-black text-slate-950 uppercase tracking-wider">
+              {isAr ? "تحليلات توزيع المستأجر والإشغال التاريخي" : "Tenant Distribution & Historical Occupancy Analytics"}
+            </h3>
+          </div>
+
+          <LeaseOccupancyAnalytics
+            lease={lease}
+            tenant={tenant}
+            unit={unit}
+            property={property}
+            allLeases={leases}
+            allTenants={tenants}
+            cheques={cheques}
+            collections={collections}
+          />
         </div>
 
         {/* SECTION 2: PARTIES, PROPERTY & UNIT SPECS */}

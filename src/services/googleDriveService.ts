@@ -642,6 +642,91 @@ export const uploadFileToGoogleDrive = async (params: {
 };
 
 /**
+ * Update existing file in Google Drive in place (idempotent, prevents duplicates)
+ */
+export const updateExistingDriveFile = async (params: {
+  fileId: string;
+  base64OrBlobUrl: string;
+  mimeType?: string;
+  newFileName?: string;
+}): Promise<{
+  success: boolean;
+  fileId?: string;
+  webViewLink?: string;
+  webContentLink?: string;
+  error?: string;
+}> => {
+  try {
+    const token = await getAccessToken();
+    if (!token) {
+      return { success: false, error: "NO_AUTH" };
+    }
+
+    let fileBlob: Blob;
+    const effectiveMime = params.mimeType || "image/jpeg";
+
+    if (params.base64OrBlobUrl.startsWith("data:")) {
+      const arr = params.base64OrBlobUrl.split(",");
+      const mime = arr[0].match(/:(.*?);/)?.[1] || effectiveMime;
+      const bstr = atob(arr[1]);
+      let n = bstr.length;
+      const u8arr = new Uint8Array(n);
+      while (n--) {
+        u8arr[n] = bstr.charCodeAt(n);
+      }
+      fileBlob = new Blob([u8arr], { type: mime });
+    } else if (params.base64OrBlobUrl.startsWith("blob:")) {
+      const response = await fetch(params.base64OrBlobUrl);
+      fileBlob = await response.blob();
+    } else {
+      fileBlob = new Blob([params.base64OrBlobUrl], { type: effectiveMime });
+    }
+
+    // Update media content via PATCH
+    const patchUrl = `https://www.googleapis.com/upload/drive/v3/files/${params.fileId}?uploadType=media&fields=id,name,webViewLink,webContentLink`;
+    const res = await fetch(patchUrl, {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": effectiveMime,
+      },
+      body: fileBlob,
+    });
+
+    if (!res.ok) {
+      throw new Error(`Failed to update Drive file content (${res.status})`);
+    }
+
+    const resData = await res.json();
+
+    // If filename needs update as well
+    if (params.newFileName) {
+      await fetch(`https://www.googleapis.com/drive/v3/files/${params.fileId}`, {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ name: params.newFileName }),
+      });
+    }
+
+    return {
+      success: true,
+      fileId: resData.id || params.fileId,
+      webViewLink: resData.webViewLink || `https://drive.google.com/file/d/${params.fileId}/view`,
+      webContentLink: resData.webContentLink,
+    };
+  } catch (err: any) {
+    console.warn("Drive file update error:", err);
+    return {
+      success: false,
+      error: err.message || "Failed to update existing Drive file",
+    };
+  }
+};
+
+/**
  * PHASE 57-K.5: Authenticated binary retrieval for native ERP in-app document preview
  * Fetches file content securely via Google Drive v3 API media endpoint
  */

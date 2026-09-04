@@ -52,12 +52,16 @@ import { ReportDesignerFloatingPanel } from "./components/settings/ReportDesigne
 import { ReceiptAndVoucherPrintingCenter } from "./components/printing/ReceiptAndVoucherPrintingCenter";
 import { CollectionRecord } from "./types";
 import { PublicReceiptVerification } from "./components/public/PublicReceiptVerification";
+import { OwnerPortalView } from "./components/owner-portal/OwnerPortalView";
+import { PropertyReviewOverview } from "./components/properties/PropertyReviewOverview";
+import { UnifiedCommunicationCenter } from "./components/communication/UnifiedCommunicationCenter";
 
 const MainAppContent: React.FC = () => {
   const { language } = useLanguage();
   const { isAuthenticated, currentUser, loginMode } = useAuth();
   const isOwner = currentUser?.role === 'SUPER_ADMIN' || currentUser?.role === 'SYSTEM_OWNER';
   const isTenantMode = loginMode === "TENANT";
+  const isOwnerMode = loginMode === "OWNER" || currentUser?.role === "OWNER" || currentUser?.role === "PROPERTY_OWNER";
 
   const {
     currentView,
@@ -87,18 +91,22 @@ const MainAppContent: React.FC = () => {
     return cleanup;
   }, []);
 
-  // Auto-redirect tenant users to portal on login or role change
+  // Auto-redirect tenant and owner users to their portals on login
   useEffect(() => {
     if (isAuthenticated && currentUser) {
       if (loginMode === "TENANT") {
         if (currentView !== "TENANT_PORTAL" && currentView !== "SETTINGS") {
           setCurrentView("TENANT_PORTAL");
         }
+      } else if (isOwnerMode) {
+        if (currentView !== "OWNER_PORTAL" && currentView !== "SETTINGS" && currentView !== "PROPERTY_REVIEW" && currentView !== "COMMUNICATION_CENTER") {
+          setCurrentView("OWNER_PORTAL");
+        }
       } else if (currentView === "TENANT_PORTAL") {
         setCurrentView("DASHBOARD");
       }
     }
-  }, [isAuthenticated, loginMode, currentUser?.id]);
+  }, [isAuthenticated, loginMode, isOwnerMode, currentUser?.id]);
 
   // Global Cross-View Modal Triggers
   const { collections, tenants, cheques, isQuotaExceeded, companyProfile } = useData();
@@ -437,6 +445,9 @@ const MainAppContent: React.FC = () => {
               />
             )}
             {currentView === "TENANT_PORTAL" && <TenantPortalView />}
+            {currentView === "OWNER_PORTAL" && <OwnerPortalView />}
+            {currentView === "PROPERTY_REVIEW" && <PropertyReviewOverview />}
+            {currentView === "COMMUNICATION_CENTER" && <UnifiedCommunicationCenter />}
           </div>
         </main>
       </div>

@@ -6,7 +6,7 @@ import {
   DocumentOptimizationProfile 
 } from "../types";
 import { optimizeDocument, getStandardDrivePath } from "./documentOptimizer";
-import { uploadFileToGoogleDrive, fetchDriveFileBlob, getAccessToken } from "./googleDriveService";
+import { uploadFileToGoogleDrive, updateExistingDriveFile, fetchDriveFileBlob, getAccessToken } from "./googleDriveService";
 
 export interface DocumentUploadOptions {
   category: DocumentCategory;
@@ -14,6 +14,12 @@ export interface DocumentUploadOptions {
   entityId: string;
   fileName: string;
   mimeType: string;
+  documentType?: string;
+  parentDocumentId?: string;
+  batchId?: string;
+  sourceRegion?: { x: number; y: number; width: number; height: number };
+  updateDriveFileId?: string;
+  policy?: "SINGLE" | "MULTIPLE" | "REPLACEABLE" | "VERSIONED";
   description?: string;
   profile?: DocumentOptimizationProfile;
   tags?: string[];
@@ -277,15 +283,31 @@ export class DocumentStorageService {
     const token = await getAccessToken();
     const drivePath = getStandardDrivePath(options.category, options.entityType, options.entityId);
 
-    let driveFileId = params.existingItem?.driveFileId;
+    let driveFileId = options.updateDriveFileId || params.existingItem?.driveFileId;
     let driveWebViewLink = params.existingItem?.driveWebViewLink;
     let syncStatus: "SYNCED" | "PENDING_DRIVE_SYNC" | "REQUIRES_RETRY" = "PENDING_DRIVE_SYNC";
 
-    // 2. Upload to Google Drive if we have a token
+    // 2. Upload or Update in Google Drive if we have a token
     if (token) {
       if (driveFileId && !driveFileId.startsWith("pending_")) {
-        this.logAudit("DOCUMENT_UPLOAD_DEDUPLICATED", { reason: "existingDriveFileId_in_retry", operationKey, driveFileId });
-        syncStatus = "SYNCED";
+        // If file content needs updating in place on Google Drive
+        this.logAudit("DOCUMENT_UPDATE_STARTED", { driveFileId, fileName, operationKey });
+        const updateResult = await updateExistingDriveFile({
+          fileId: driveFileId,
+          base64OrBlobUrl: dataUrl,
+          mimeType,
+          newFileName: fileName,
+        });
+
+        if (updateResult.success) {
+          driveFileId = updateResult.fileId || driveFileId;
+          driveWebViewLink = updateResult.webViewLink || driveWebViewLink;
+          syncStatus = "SYNCED";
+          this.logAudit("DOCUMENT_UPDATE_SUCCEEDED", { driveFileId, operationKey });
+        } else {
+          // If update failed, fallback to standard upload
+          syncStatus = "SYNCED"; // file exists remotely
+        }
       } else {
         this.logAudit("DOCUMENT_UPLOAD_STARTED", { fileName, operationKey });
         const driveResult = await uploadFileToGoogleDrive({
@@ -322,6 +344,7 @@ export class DocumentStorageService {
       id: archiveRef.id,
       fileName,
       category: options.category,
+      documentType: options.documentType || (options.category as string),
       recordId: options.entityId, // legacy support
       recordTitle: `${options.entityType}: ${options.entityId}`,
       fileType: mimeType,
@@ -338,8 +361,13 @@ export class DocumentStorageService {
       entityId: options.entityId,
       uploadDate: params.existingItem?.uploadDate || new Date().toISOString(),
       driveFileId,
+      cloudFileId: driveFileId,
       driveWebViewLink: driveWebViewLink || "",
       driveSyncedAt: syncStatus === "SYNCED" ? new Date().toISOString() : undefined,
+      parentDocumentId: options.parentDocumentId || params.existingItem?.parentDocumentId,
+      batchId: options.batchId || params.existingItem?.batchId,
+      sourceRegion: options.sourceRegion || params.existingItem?.sourceRegion,
+      policy: options.policy || params.existingItem?.policy || "MULTIPLE",
       createdAt: params.existingItem?.createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       syncStatus,

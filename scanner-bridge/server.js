@@ -65,9 +65,9 @@ app.use(cors({
 }));
 
 /**
- * Execute PowerShell script with standard parameters
+ * Execute PowerShell script with standard parameters and timeout enforcement
  */
-function runPowerShell(args) {
+function runPowerShell(args, timeoutMs = 60000) {
   return new Promise((resolve, reject) => {
     const psScript = path.join(__dirname, 'wia-scanner.ps1');
     const fullArgs = [
@@ -77,8 +77,11 @@ function runPowerShell(args) {
       ...args
     ];
 
-    execFile('powershell.exe', fullArgs, { maxBuffer: 1024 * 1024 * 15 }, (error, stdout, stderr) => {
+    execFile('powershell.exe', fullArgs, { maxBuffer: 1024 * 1024 * 25, timeout: timeoutMs }, (error, stdout, stderr) => {
       if (error && !stdout) {
+        if (error.killed) {
+          return reject(new Error('انتهت مهلة استجابة الماسح الضوئي (Timeout). يرجى التحقق من اتصال الماسح وتغذيته بالطاقة.'));
+        }
         return reject(new Error(stderr || error.message));
       }
       try {
@@ -438,7 +441,7 @@ app.post('/scan/batch', async (req, res) => {
       '-MaxPages', String(maxPages),
     ];
 
-    const result = await runPowerShell(psArgs);
+    const result = await runPowerShell(psArgs, 180000);
 
     if (!result.success) {
       lastScanTelemetry = {

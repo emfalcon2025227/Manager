@@ -5661,27 +5661,68 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   
   const extractDocumentOCR = async (documentType: string, imageBase64: string, mimeType = "image/jpeg"): Promise<any> => {
     try {
+      let cleanB64 = (imageBase64 || "").trim();
+      if (cleanB64.includes(",")) {
+        cleanB64 = cleanB64.substring(cleanB64.lastIndexOf(",") + 1);
+      }
+      cleanB64 = cleanB64.replace(/[\r\n\s]/g, "");
+      const safeDataUrl = `data:${mimeType};base64,${cleanB64}`;
+
       if (documentType === "EMIRATES_ID") {
-        const { OCRV2Engine } = await import("../services/ocr/v2/OCRV2Engine");
-        const dataUrl = `data:${mimeType};base64,${imageBase64}`;
-        const v2Res = await OCRV2Engine.extract(dataUrl, "EMIRATES_ID", "accurate");
-        if (v2Res.success && v2Res.data && v2Res.fields) {
-          return {
-            success: true,
-            data: v2Res.data,
-            fields: v2Res.fields,
-            metadata: v2Res.diagnostics,
-          };
-        } else {
-          return {
-            success: false,
-            error: v2Res.diagnostics?.errorMsg || "OCR V2 failed",
-            errorAr: v2Res.diagnostics?.errorMsg || "فشلت عملية القراءة V2",
-          };
+        try {
+          const { OCRV2Engine } = await import("../services/ocr/v2/OCRV2Engine");
+          const v2Res = await OCRV2Engine.extract(safeDataUrl, "EMIRATES_ID", "accurate");
+          if (v2Res.success && v2Res.data && Object.keys(v2Res.data).length > 0) {
+            return {
+              success: true,
+              data: v2Res.data,
+              fields: v2Res.fields,
+              metadata: v2Res.diagnostics,
+            };
+          }
+        } catch (v2Err) {
+          console.warn("[DataContext] OCR V2 fallback to V1 for Emirates ID:", v2Err);
         }
+
+        const res = await OCRService.extractDocument(cleanB64, "EMIRATES_ID", "accurate", mimeType);
+        return {
+          success: res.success,
+          data: res.data,
+          fields: res.fields,
+          metadata: res.metadata,
+          error: res.errorAr || res.error,
+          errorAr: res.errorAr,
+        };
       }
 
-      const res = await OCRService.extractDocument(imageBase64, documentType, "accurate", mimeType);
+      if (documentType === "CHEQUE") {
+        try {
+          const { OCRV2Engine } = await import("../services/ocr/v2/OCRV2Engine");
+          const v2Res = await OCRV2Engine.extract(safeDataUrl, "CHEQUE", "forensic");
+          if (v2Res.success && v2Res.data && Object.keys(v2Res.data).length > 0) {
+            return {
+              success: true,
+              data: v2Res.data,
+              fields: v2Res.fields,
+              metadata: v2Res.diagnostics,
+            };
+          }
+        } catch (v2Err) {
+          console.warn("[DataContext] OCR V2 fallback to V1 for Cheque:", v2Err);
+        }
+
+        const res = await OCRService.extractCheque(cleanB64, mimeType);
+        return {
+          success: res.success,
+          data: res.data,
+          fields: res.fields,
+          metadata: res.metadata,
+          error: res.errorAr || res.error,
+          errorAr: res.errorAr,
+        };
+      }
+
+      const res = await OCRService.extractDocument(cleanB64, documentType, "accurate", mimeType);
       return {
         success: res.success,
         data: res.data,
@@ -5698,7 +5739,13 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const extractChequeOCR = async (imageBase64: string, mimeType = "image/jpeg"): Promise<any> => {
     try {
-      const res = await OCRService.extractCheque(imageBase64, mimeType);
+      let cleanB64 = (imageBase64 || "").trim();
+      if (cleanB64.includes(",")) {
+        cleanB64 = cleanB64.substring(cleanB64.lastIndexOf(",") + 1);
+      }
+      cleanB64 = cleanB64.replace(/[\r\n\s]/g, "");
+
+      const res = await OCRService.extractCheque(cleanB64, mimeType);
       return {
         success: res.success,
         data: res.data,
@@ -5718,7 +5765,22 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const extractChequeBatchOCR = async (payload: { imageBase64?: string; images?: string[]; mimeType?: string }): Promise<any> => {
     try {
-      const res = await OCRService.extractChequeBatch(payload);
+      let safeBase64 = payload.imageBase64;
+      if (safeBase64 && safeBase64.includes(",")) {
+        safeBase64 = safeBase64.substring(safeBase64.lastIndexOf(",") + 1).replace(/[\r\n\s]/g, "");
+      }
+      const safeImages = payload.images?.map((img) => {
+        if (img && img.includes(",")) {
+          return img.substring(img.lastIndexOf(",") + 1).replace(/[\r\n\s]/g, "");
+        }
+        return img ? img.replace(/[\r\n\s]/g, "") : img;
+      });
+
+      const res = await OCRService.extractChequeBatch({
+        imageBase64: safeBase64,
+        images: safeImages,
+        mimeType: payload.mimeType,
+      });
       return {
         success: res.success,
         data: res.data,

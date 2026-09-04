@@ -137,6 +137,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
       icon: <LayoutDashboard className="w-4 h-4" />,
       requiredPermission: "TENANT_VIEW_OWN_DATA",
     },
+    {
+      id: "OWNER_PORTAL",
+      labelKey: language === "ar" ? "بوابة المالك الاستثمارية" : "Owner Portal",
+      icon: <LayoutDashboard className="w-4 h-4" />,
+      requiredPermission: "OWNER_VIEW_OWN_DATA",
+    },
     // Financial Center & Admin Fees
     {
       id: "FINANCIALS",
@@ -216,6 +222,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
       requiredPermission: "MANAGE_MASTER_DATA",
     },
     {
+      id: "PROPERTY_REVIEW",
+      labelKey: language === "ar" ? "مراجعة المحفظة العقارية" : "Property Portfolio Review",
+      icon: <Building className="w-4 h-4" />,
+      requiredPermission: "MANAGE_MASTER_DATA",
+    },
+    {
       id: "UNITS",
       labelKey: "navUnits",
       icon: <KeyRound className="w-4 h-4" />,
@@ -229,11 +241,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
     },
     // Communications & Security Archive
     {
+      id: "COMMUNICATION_CENTER",
+      labelKey: language === "ar" ? "مركز الاتصال الموحد" : "Unified Communication",
+      icon: <MessageSquare className="w-4 h-4" />,
+      requiredPermission: "DISPATCH_NOTIFICATIONS",
+      sectionHeaderKey: "electronicArchive",
+    },
+    {
       id: "ARCHIVE",
       labelKey: "navArchive",
       icon: <FolderLock className="w-4 h-4" />,
       requiredPermission: "MANAGE_ARCHIVE",
-      sectionHeaderKey: "electronicArchive",
     },
     {
       id: "AUDIT_LOGS",
@@ -301,9 +319,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
     },
   ];
 
+  const isOwnerMode = loginMode === "OWNER" || currentUser?.role === "OWNER" || currentUser?.role === "PROPERTY_OWNER";
+
   const navItems = allNavItems.filter(item => {
     if (isTenantMode) {
       return item.id === "TENANT_PORTAL" || item.id === "SETTINGS";
+    }
+    if (isOwnerMode) {
+      return item.id === "OWNER_PORTAL" || item.id === "PROPERTY_REVIEW" || item.id === "COMMUNICATION_CENTER" || item.id === "SETTINGS";
     }
     return item.id !== "TENANT_PORTAL";
   });

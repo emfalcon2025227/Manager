@@ -29,18 +29,20 @@ export class OCRV2ImageProcessor {
     }
 
     let mime = "image/jpeg";
-    let base64Data = dataUrl;
+    let base64Data = dataUrl.trim();
 
-    if (dataUrl.startsWith("data:")) {
-      const matches = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
-      if (!matches) {
-        return { valid: false, mime: "", sizeKb: 0, error: "Invalid Data URL format" };
+    if (base64Data.includes(",")) {
+      const parts = base64Data.split(",");
+      base64Data = parts[parts.length - 1].replace(/[\r\n\s]/g, "");
+      const mimeMatch = parts[0].match(/data:([^;]+);base64/);
+      if (mimeMatch) {
+        mime = mimeMatch[1];
       }
-      mime = matches[1];
-      base64Data = matches[2];
+    } else {
+      base64Data = base64Data.replace(/[\r\n\s]/g, "");
     }
 
-    if (!base64Data || base64Data.length < 100) {
+    if (!base64Data || base64Data.length < 50) {
       return { valid: false, mime, sizeKb: 0, error: "Base64 payload too small to be valid image" };
     }
 

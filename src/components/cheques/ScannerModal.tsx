@@ -1,12 +1,8 @@
 import React, { useState, useEffect, useRef } from "react";
 import {
-  Camera,
   RefreshCw,
   Check,
   AlertCircle,
-  Settings,
-  Shield,
-  Sliders,
   Maximize2,
   RotateCw,
   Upload,
@@ -15,12 +11,15 @@ import {
   Copy,
   CheckCircle2,
   HelpCircle,
-  ExternalLink,
   Zap,
   Activity,
   Layers,
   ChevronLeft,
   ChevronRight,
+  Grid,
+  FileText,
+  Scissors,
+  Shield,
 } from "lucide-react";
 import { Modal } from "../common/Modal";
 import {
@@ -36,13 +35,21 @@ import {
 } from "../../services/hpScannerBridgeGenerator";
 import { ScannerDiagnosticsModal } from "../scanner/ScannerDiagnosticsModal";
 import { useLanguage } from "../../context/LanguageContext";
+import { MultiChequeSegmenter, ChequeRegion } from "../../services/ocr/multiChequeSegmenter";
+
+export interface MultiChequeScanPayload {
+  originalSourceDataUrl: string;
+  cheques: ChequeRegion[];
+}
 
 export interface ScannerModalProps {
   isOpen: boolean;
   onClose: () => void;
   onScanComplete: (imageBase64: string, mimeType: string) => void;
   onBatchScanComplete?: (pages: { imageBase64: string; mimeType: string }[]) => void;
+  onMultiChequeScanComplete?: (payload: MultiChequeScanPayload) => void;
   documentType?: string;
+  initialMode?: "SINGLE" | "FLATBED_MULTI_CHEQUE" | "ADF_BATCH";
 }
 
 export const ScannerModal: React.FC<ScannerModalProps> = ({
@@ -50,7 +57,9 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
   onClose,
   onScanComplete,
   onBatchScanComplete,
+  onMultiChequeScanComplete,
   documentType,
+  initialMode,
 }) => {
   const { language } = useLanguage();
   const isAr = language === "ar";
@@ -58,20 +67,26 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
   const [devices, setDevices] = useState<ScannerDevice[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>("");
 
+  // Workflow Mode: SINGLE | FLATBED_MULTI_CHEQUE | ADF_BATCH
+  const [workflowMode, setWorkflowMode] = useState<"SINGLE" | "FLATBED_MULTI_CHEQUE" | "ADF_BATCH">(
+    initialMode || (documentType === "BATCH_CHEQUES" ? "FLATBED_MULTI_CHEQUE" : "SINGLE")
+  );
+
   // Settings
   const [resolutionDpi, setResolutionDpi] = useState<number>(300);
   const [colorMode, setColorMode] = useState<"COLOR" | "GRAYSCALE" | "MONO">("COLOR");
   const [paperSource, setPaperSource] = useState<"auto" | "flatbed" | "feeder">(
-    documentType === "BATCH_CHEQUES" ? "feeder" : "auto"
+    workflowMode === "ADF_BATCH" ? "feeder" : "flatbed"
   );
   const [autoCrop, setAutoCrop] = useState<boolean>(true);
   const [paperSize, setPaperSize] = useState<string>(
-    documentType === "BATCH_CHEQUES" || documentType === "CHEQUE" ? "CHEQUE" : "A4"
+    workflowMode === "FLATBED_MULTI_CHEQUE" ? "A4" : documentType === "CHEQUE" ? "CHEQUE" : "A4"
   );
-  const [isBatchMode, setIsBatchMode] = useState<boolean>(documentType === "BATCH_CHEQUES");
+  const [isBatchMode, setIsBatchMode] = useState<boolean>(workflowMode !== "SINGLE");
 
   // State
   const [isScanning, setIsScanning] = useState(false);
+  const [isSegmenting, setIsSegmenting] = useState(false);
   const [scanStatusMsg, setScanStatusMsg] = useState("");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [showBridgeHelp, setShowBridgeHelp] = useState(false);
@@ -89,6 +104,11 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
   const [selectedBatchPageIndex, setSelectedBatchPageIndex] = useState<number>(0);
   const [rotation, setRotation] = useState(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
+
+  // Flatbed Multi-Cheque Segmentation Results
+  const [segmentedCheques, setSegmentedCheques] = useState<ChequeRegion[]>([]);
+  const [selectedSegmentedIndex, setSelectedSegmentedIndex] = useState<number>(0);
+  const [originalFlatbedSource, setOriginalFlatbedSource] = useState<string | null>(null);
 
   // Live Bridge Health Status
   const [bridgeHealth, setBridgeHealth] = useState<BridgeHealthStatus>({
@@ -112,10 +132,30 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
       setScanResult(null);
       setBatchPages([]);
       setSelectedBatchPageIndex(0);
+      setSegmentedCheques([]);
+      setOriginalFlatbedSource(null);
+      setSelectedSegmentedIndex(0);
       setRotation(0);
       setIsFullscreen(false);
       setShowBridgeHelp(false);
-      setIsBatchMode(documentType === "BATCH_CHEQUES");
+
+      const mode = initialMode || (documentType === "BATCH_CHEQUES" ? "FLATBED_MULTI_CHEQUE" : "SINGLE");
+      setWorkflowMode(mode);
+      if (mode === "FLATBED_MULTI_CHEQUE") {
+        setPaperSource("flatbed");
+        setPaperSize("A4");
+        setResolutionDpi(300);
+        setColorMode("COLOR");
+        setAutoCrop(false);
+        setIsBatchMode(true);
+      } else if (mode === "ADF_BATCH") {
+        setPaperSource("feeder");
+        setPaperSize("CHEQUE");
+        setIsBatchMode(true);
+      } else {
+        setPaperSource("auto");
+        setIsBatchMode(false);
+      }
 
       // Subscribe to bridge status updates
       const unsub = scannerService.subscribeStatus((status) => {
@@ -129,18 +169,15 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
       stopCamera();
     }
     return () => stopCamera();
-  }, [isOpen, documentType]);
+  }, [isOpen, documentType, initialMode]);
 
   const loadDevices = async () => {
     const list = await scannerService.getAvailableScanners(true);
     setDevices(list);
     if (list.length > 0) {
-      // Prefer physical ONLINE WIA devices first
       const activeDev = list.find((d) => d.status === "ONLINE" && d.type === "TWAIN_WIA_BRIDGE");
       setSelectedDeviceId(activeDev ? activeDev.id : list[0].id);
     }
-    const health = await scannerService.checkBridgeStatus(true);
-    setBridgeHealth(health);
   };
 
   const startCamera = async () => {
@@ -150,9 +187,10 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
       });
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
+        videoRef.current.play();
         setCameraActive(true);
       }
-    } catch (err) {
+    } catch {
       setCameraActive(false);
     }
   };
@@ -166,23 +204,73 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
     setCameraActive(false);
   };
 
+  const handleSegmentImage = async (dataUrl: string) => {
+    setIsSegmenting(true);
+    try {
+      const res = await MultiChequeSegmenter.segmentMultiChequeImage(dataUrl, {
+        minChequesExpected: 1,
+        maxChequesExpected: 4,
+      });
+
+      if (res.cheques && res.cheques.length > 0) {
+        setSegmentedCheques(res.cheques);
+        setSelectedSegmentedIndex(0);
+        setOriginalFlatbedSource(dataUrl);
+      } else {
+        // Fallback to single cheque
+        setSegmentedCheques([{
+          id: `seg_1_${Date.now()}`,
+          index: 0,
+          croppedDataUrl: dataUrl,
+          bounds: { x: 0, y: 0, width: 1, height: 1 },
+          relativeBounds: { xPercent: 0, yPercent: 0, widthPercent: 1, heightPercent: 1 },
+          confidence: 0.8,
+          rotationDegrees: 0,
+          width: 1200,
+          height: 600,
+          aspectRatio: 2,
+        }]);
+        setOriginalFlatbedSource(dataUrl);
+      }
+    } catch (segErr) {
+      console.error("Multi-cheque segmentation error:", segErr);
+      setSegmentedCheques([{
+        id: `seg_1_${Date.now()}`,
+        index: 0,
+        croppedDataUrl: dataUrl,
+        bounds: { x: 0, y: 0, width: 1, height: 1 },
+        relativeBounds: { xPercent: 0, yPercent: 0, widthPercent: 1, heightPercent: 1 },
+        confidence: 0.7,
+        rotationDegrees: 0,
+        width: 1200,
+        height: 600,
+        aspectRatio: 2,
+      }]);
+      setOriginalFlatbedSource(dataUrl);
+    } finally {
+      setIsSegmenting(false);
+    }
+  };
+
   const handleExecuteScan = async () => {
     setIsScanning(true);
     setErrorMsg(null);
     setScanResult(null);
     setBatchPages([]);
+    setSegmentedCheques([]);
+    setOriginalFlatbedSource(null);
     setRotation(0);
 
-    const useBatch = isBatchMode || paperSource === "feeder" || documentType === "BATCH_CHEQUES";
-
     setScanStatusMsg(
-      useBatch
+      workflowMode === "FLATBED_MULTI_CHEQUE"
+        ? (isAr ? "جاري مسح السطح الزجاجي (Flatbed) واكتشاف الشيكات المتعددة..." : "Scanning Flatbed glass & segmenting cheques...")
+        : workflowMode === "ADF_BATCH"
         ? (isAr ? "جاري سحب دفعة المستندات من وحدة التغذية (ADF)..." : "Scanning document batch from ADF feeder...")
         : (isAr ? "جاري إرسال أمر السحب إلى طابعة HP M282nw..." : "Sending scan command to HP M282nw Scanner...")
     );
 
     try {
-      if (useBatch) {
+      if (workflowMode === "ADF_BATCH") {
         // Multi-page ADF Batch Scan
         const batchRes = await scannerService.acquireBatchScan({
           deviceId: selectedDeviceId,
@@ -205,6 +293,27 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
               (isAr
                 ? "تعذر سحب الأوراق من وحدة التغذية (ADF). تأكد من وضع المستندات وتشغيل الجسر."
                 : "Could not scan from feeder. Ensure documents are placed and bridge is running.")
+          );
+        }
+      } else if (workflowMode === "FLATBED_MULTI_CHEQUE") {
+        // Flatbed Multi-Cheque Full Scan
+        const scanRes = await scannerService.acquireScan({
+          deviceId: selectedDeviceId,
+          resolutionDpi: 300,
+          colorMode,
+          autoCrop: false, // keep entire bed for segmentation
+          paperSource: "flatbed",
+        });
+
+        if (scanRes.success && scanRes.imageBase64) {
+          setScanResult({ imageBase64: scanRes.imageBase64, mimeType: scanRes.mimeType });
+          await handleSegmentImage(scanRes.imageBase64);
+        } else {
+          throw new Error(
+            scanRes.error ||
+              (isAr
+                ? "تعذر إجراء المسح من السطح الزجاجي. يرجى تشغيل أداة Start-HP-Scanner.bat."
+                : "Could not scan from Flatbed glass. Please ensure bridge is active.")
           );
         }
       } else {
@@ -244,7 +353,24 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
   };
 
   const handleConfirm = () => {
-    if (batchPages.length > 1 && onBatchScanComplete) {
+    if (workflowMode === "FLATBED_MULTI_CHEQUE" && segmentedCheques.length > 0) {
+      if (onMultiChequeScanComplete && originalFlatbedSource) {
+        onMultiChequeScanComplete({
+          originalSourceDataUrl: originalFlatbedSource,
+          cheques: segmentedCheques,
+        });
+      } else if (onBatchScanComplete) {
+        onBatchScanComplete(
+          segmentedCheques.map((c) => ({
+            imageBase64: c.croppedDataUrl,
+            mimeType: "image/jpeg",
+          }))
+        );
+      } else if (scanResult) {
+        onScanComplete(scanResult.imageBase64, scanResult.mimeType);
+      }
+      onClose();
+    } else if (batchPages.length > 1 && onBatchScanComplete) {
       onBatchScanComplete(batchPages.map((p) => ({ imageBase64: p.imageBase64, mimeType: p.mimeType })));
       onClose();
     } else if (scanResult) {
@@ -256,7 +382,10 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
   const handleRescan = () => {
     setScanResult(null);
     setBatchPages([]);
+    setSegmentedCheques([]);
+    setOriginalFlatbedSource(null);
     setSelectedBatchPageIndex(0);
+    setSelectedSegmentedIndex(0);
     setRotation(0);
     setErrorMsg(null);
   };
@@ -349,13 +478,13 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
                       {isAr ? "ماسح HP Color LaserJet Pro MFP M282nw" : "HP Color LaserJet Pro MFP M282nw"}
                     </span>
                     <span className="px-2 py-0.5 bg-blue-500/20 text-blue-300 rounded text-[10px] font-mono font-semibold">
-                      WIA / ADF / USB / Network
+                      WIA / ADF / Flatbed / USB / Network
                     </span>
                   </div>
                   <span className="text-slate-400 text-[11px] mt-0.5">
                     {isAr
-                      ? "مسح الشيكات والمستندات وعقود الإيجار مباشرة من درج السحب (ADF) أو السطح الزجاجي"
-                      : "Direct hardware scanning from feeder (ADF) or flatbed glass"}
+                      ? "مسح الشيكات المتعددة من السطح الزجاجي، أو السحب الفردي، أو التغذية الآلية (ADF)"
+                      : "Multi-cheque Flatbed scan, Single scan, or ADF batch feeder"}
                   </span>
                 </div>
               </div>
@@ -383,6 +512,69 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
                   </button>
                 )}
               </div>
+            </div>
+          )}
+
+          {/* Workflow Mode Tabs */}
+          {!scanResult && (
+            <div className="flex flex-wrap gap-2 p-1.5 bg-slate-100 dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700">
+              <button
+                type="button"
+                onClick={() => {
+                  setWorkflowMode("FLATBED_MULTI_CHEQUE");
+                  setPaperSource("flatbed");
+                  setPaperSize("A4");
+                  setAutoCrop(false);
+                  setIsBatchMode(true);
+                }}
+                className={`flex-1 min-w-[180px] py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all ${
+                  workflowMode === "FLATBED_MULTI_CHEQUE"
+                    ? "bg-indigo-600 text-white shadow-md"
+                    : "text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700"
+                }`}
+              >
+                <Grid className="w-4 h-4" />
+                <span>{isAr ? "مسح متعدد (سطح زجاجي 1-4 شيكات)" : "Flatbed Multi-Cheque (1-4)"}</span>
+                <span className="px-1.5 py-0.5 bg-emerald-500/30 text-emerald-200 rounded text-[10px] font-mono">
+                  Auto-Crop
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setWorkflowMode("SINGLE");
+                  setPaperSource("auto");
+                  setPaperSize("CHEQUE");
+                  setAutoCrop(true);
+                  setIsBatchMode(false);
+                }}
+                className={`flex-1 min-w-[140px] py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all ${
+                  workflowMode === "SINGLE"
+                    ? "bg-blue-600 text-white shadow-md"
+                    : "text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700"
+                }`}
+              >
+                <FileText className="w-4 h-4" />
+                <span>{isAr ? "مسح فردي (Single)" : "Single Scan"}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setWorkflowMode("ADF_BATCH");
+                  setPaperSource("feeder");
+                  setIsBatchMode(true);
+                }}
+                className={`flex-1 min-w-[140px] py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all ${
+                  workflowMode === "ADF_BATCH"
+                    ? "bg-purple-600 text-white shadow-md"
+                    : "text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700"
+                }`}
+              >
+                <Layers className="w-4 h-4" />
+                <span>{isAr ? "تغذية مستمرة (ADF Feeder)" : "Continuous ADF"}</span>
+              </button>
             </div>
           )}
 
@@ -419,8 +611,8 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
                     </div>
                     <p className="text-slate-400 text-[11px] mb-2">
                       {isAr
-                        ? "ملف تنفيذي مدمج لا يغلق تلقائياً ويدعم المسح الفردي ودفعة ADF."
-                        : "All-in-one launcher supporting single scan and ADF batch."}
+                        ? "ملف تنفيذي مدمج لا يغلق تلقائياً ويدعم المسح الفردي ودفعة ADF والسطح الزجاجي."
+                        : "All-in-one launcher supporting single scan, ADF batch, and flatbed."}
                     </p>
                   </div>
                   <button
@@ -518,14 +710,15 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
                   onChange={(e) => {
                     const src = e.target.value as any;
                     setPaperSource(src);
-                    if (src === "feeder") setIsBatchMode(true);
+                    if (src === "feeder") setWorkflowMode("ADF_BATCH");
+                    else if (src === "flatbed") setWorkflowMode("FLATBED_MULTI_CHEQUE");
                   }}
                   disabled={isScanning}
                   className="w-full bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-lg p-1.5 font-medium dark:text-white"
                 >
                   <option value="auto">{isAr ? "تلقائي (Auto)" : "Auto"}</option>
+                  <option value="flatbed">{isAr ? "السطح الزجاجي (Flatbed)" : "Flatbed"}</option>
                   <option value="feeder">{isAr ? "درج السحب (ADF)" : "ADF Feeder"}</option>
-                  <option value="flatbed">{isAr ? "السطح الزجاجي" : "Flatbed"}</option>
                 </select>
               </div>
 
@@ -539,8 +732,8 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
                   disabled={isScanning}
                   className="w-full bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-lg p-1.5 font-medium dark:text-white"
                 >
+                  <option value="A4">A4 (سطح زجاجي / مستند)</option>
                   <option value="CHEQUE">{isAr ? "شيك بنكي (Cheque)" : "Cheque"}</option>
-                  <option value="A4">A4 (عقد/مستند)</option>
                   <option value="ID">{isAr ? "بطاقة هوية (ID)" : "ID Card"}</option>
                   <option value="AUTO">{isAr ? "تلقائي (Auto)" : "Auto"}</option>
                 </select>
@@ -556,8 +749,8 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
                   disabled={isScanning}
                   className="w-full bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-lg p-1.5 font-medium dark:text-white"
                 >
+                  <option value={300}>300 DPI (مثالي للـ OCR)</option>
                   <option value={200}>200 DPI (سريع)</option>
-                  <option value={300}>300 DPI (قياسي / مثالي)</option>
                   <option value={600}>600 DPI (فائق الدقة)</option>
                 </select>
               </div>
@@ -629,17 +822,41 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
                   <div className="space-y-1">
                     <p className="text-sm font-bold text-slate-200">
                       {isAr
-                        ? "الماسح الضوئي HP Color LaserJet Pro جاهز للاستخدام"
+                        ? workflowMode === "FLATBED_MULTI_CHEQUE"
+                          ? "جاهز للمسح المتعدد: ضع حتى 4 شيكات على السطح الزجاجي"
+                          : "الماسح الضوئي HP Color LaserJet Pro جاهز للاستخدام"
                         : "HP Color LaserJet Pro MFP Scanner Ready"}
                     </p>
                     <p className="text-xs text-slate-400 max-w-sm mx-auto">
                       {isAr
-                        ? "ضع الشيك أو المستند في درج السحب العلوي (ADF) أو على الزجاج واضغط على [بدء المسح المباشر]."
-                        : "Place document in feeder or glass and click [Start Direct Scan]."}
+                        ? workflowMode === "FLATBED_MULTI_CHEQUE"
+                          ? "قم بصف الشيكات على السطح الزجاجي بشكل منظم، وسيتم قص كل شيك ومعالجته بشكل منفصل تلقائياً."
+                          : "ضع الشيك أو المستند واضغط على زر بدء المسح المباشر."
+                        : "Place documents on glass or feeder and click start scan."}
                     </p>
                   </div>
                 </div>
               )
+            ) : workflowMode === "FLATBED_MULTI_CHEQUE" && segmentedCheques.length > 0 ? (
+              <div className="relative w-full h-full flex items-center justify-center p-2">
+                <img
+                  src={segmentedCheques[selectedSegmentedIndex]?.croppedDataUrl || scanResult.imageBase64}
+                  alt="Cropped Cheque"
+                  className="max-w-full max-h-full object-contain transition-transform duration-300 rounded-lg shadow-lg"
+                  style={{ transform: `rotate(${rotation}deg)` }}
+                />
+                <div className="absolute bottom-3 left-3 bg-black/75 backdrop-blur px-3 py-1.5 rounded-lg text-white text-xs font-mono flex items-center gap-2 border border-emerald-500/30">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                  <span>
+                    {isAr
+                      ? `الشيك المقتطع ${selectedSegmentedIndex + 1} من ${segmentedCheques.length}`
+                      : `Cropped Cheque ${selectedSegmentedIndex + 1} of ${segmentedCheques.length}`}
+                  </span>
+                  <span className="text-emerald-300 text-[10px]">
+                    ({Math.round((segmentedCheques[selectedSegmentedIndex]?.confidence || 0.9) * 100)}% Match)
+                  </span>
+                </div>
+              </div>
             ) : (
               <img
                 src={
@@ -671,7 +888,11 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
                   </span>
                 </div>
                 <div className="text-center text-[11px] text-blue-200 font-bold bg-slate-950/70 px-3 py-1 rounded backdrop-blur self-center">
-                  {isAr ? "منطقة المسح الضوئي المباشر" : "Direct Hardware Scan Framing"}
+                  {isAr
+                    ? workflowMode === "FLATBED_MULTI_CHEQUE"
+                      ? "نطاق السطح الزجاجي A4 (اكتشاف حتى 4 شيكات)"
+                      : "منطقة المسح الضوئي المباشر"
+                    : "Direct Hardware Scan Framing"}
                 </div>
                 <div className="text-right text-[10px] text-blue-300 font-mono bg-slate-950/70 px-2 py-0.5 rounded backdrop-blur self-end">
                   HP LASERJET ENGINE
@@ -680,13 +901,15 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
             )}
 
             {/* Scanning Overlay State */}
-            {isScanning && (
+            {(isScanning || isSegmenting) && (
               <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-sm flex flex-col items-center justify-center text-white z-20 space-y-4">
                 <div className="relative">
                   <Printer className="w-12 h-12 text-blue-400 animate-bounce" />
                   <RefreshCw className="w-6 h-6 text-emerald-400 animate-spin absolute -bottom-1 -right-1" />
                 </div>
-                <p className="font-bold text-sm text-blue-300">{scanStatusMsg}</p>
+                <p className="font-bold text-sm text-blue-300">
+                  {isSegmenting ? (isAr ? "جاري قص الشيكات هندسياً وعزل كل شيك..." : "Auto-cropping cheques from flatbed scan...") : scanStatusMsg}
+                </p>
                 <div className="w-56 h-2 bg-slate-800 rounded-full overflow-hidden">
                   <div className="h-full bg-gradient-to-r from-blue-500 via-indigo-500 to-emerald-500 animate-pulse w-full"></div>
                 </div>
@@ -695,8 +918,55 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
           </div>
           <canvas ref={canvasRef} className="hidden" />
 
+          {/* Flatbed Multi-Cheque Thumbnails Bar */}
+          {workflowMode === "FLATBED_MULTI_CHEQUE" && segmentedCheques.length > 0 && (
+            <div className="p-3 bg-slate-900 rounded-xl border border-indigo-500/40 text-white space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Scissors className="w-4 h-4 text-emerald-400" />
+                  <span className="text-xs font-bold text-slate-100">
+                    {isAr
+                      ? `تم اكتشاف وقص ${segmentedCheques.length} شيكات من المسح الزجاجي:`
+                      : `Detected & Segmented ${segmentedCheques.length} Cheques:`}
+                  </span>
+                </div>
+                <span className="text-[11px] text-indigo-300 font-mono">
+                  {isAr ? "انقر على الشيك لمعاينته" : "Click to inspect"}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
+                {segmentedCheques.map((chq, idx) => (
+                  <div
+                    key={chq.id || idx}
+                    onClick={() => setSelectedSegmentedIndex(idx)}
+                    className={`relative p-1.5 rounded-lg border-2 cursor-pointer transition-all ${
+                      selectedSegmentedIndex === idx
+                        ? "border-emerald-400 bg-emerald-950/40 shadow-md"
+                        : "border-slate-800 bg-slate-950 hover:border-slate-600"
+                    }`}
+                  >
+                    <img
+                      src={chq.croppedDataUrl}
+                      alt={`Cheque ${idx + 1}`}
+                      className="w-full h-16 object-cover rounded bg-black"
+                    />
+                    <div className="flex items-center justify-between mt-1 px-1">
+                      <span className="text-[10px] font-bold text-slate-200">
+                        #{idx + 1}
+                      </span>
+                      <span className="text-[9px] font-mono text-emerald-400">
+                        {Math.round(chq.confidence * 100)}%
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Multi-page ADF Batch Carousel / Selector */}
-          {batchPages.length > 1 && (
+          {batchPages.length > 1 && workflowMode !== "FLATBED_MULTI_CHEQUE" && (
             <div className="p-3 bg-slate-50 dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Layers className="w-4 h-4 text-indigo-600" />
@@ -738,7 +1008,9 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
                 <CheckCircle2 className="w-4 h-4 text-emerald-600" />
                 <span className="font-bold">
                   {isAr
-                    ? `تم مسح المستند بنجاح بدقة عالية (${batchPages.length > 0 ? `${batchPages.length} صفحات` : "صفحة واحدة"})`
+                    ? workflowMode === "FLATBED_MULTI_CHEQUE"
+                      ? `تم مسح السطح الزجاجي واقتصاص ${segmentedCheques.length} شيكات بنجاح`
+                      : `تم مسح المستند بنجاح بدقة عالية (${batchPages.length > 0 ? `${batchPages.length} صفحات` : "صفحة واحدة"})`
                     : `Document scanned successfully in high quality (${batchPages.length > 0 ? `${batchPages.length} pages` : "1 page"})`}
                 </span>
               </div>
@@ -778,7 +1050,7 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
               <button
                 type="button"
                 onClick={onClose}
-                disabled={isScanning}
+                disabled={isScanning || isSegmenting}
                 className="px-4 py-2.5 border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl text-xs font-bold transition-all"
               >
                 {isAr ? "إلغاء" : "Cancel"}
@@ -806,12 +1078,16 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
                       const file = e.target.files?.[0];
                       if (file) {
                         const reader = new FileReader();
-                        reader.onload = (event) => {
+                        reader.onload = async (event) => {
+                          const dataUrl = event.target?.result as string;
                           setScanResult({
-                            imageBase64: event.target?.result as string,
+                            imageBase64: dataUrl,
                             mimeType: file.type,
                           });
                           setErrorMsg(null);
+                          if (workflowMode === "FLATBED_MULTI_CHEQUE") {
+                            await handleSegmentImage(dataUrl);
+                          }
                         };
                         reader.readAsDataURL(file);
                       }
@@ -828,19 +1104,23 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
                   <button
                     type="button"
                     onClick={handleExecuteScan}
-                    disabled={isScanning}
-                    className="px-6 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl text-xs font-bold flex items-center gap-2 shadow-lg shadow-blue-600/20 transition-all disabled:opacity-50"
+                    disabled={isScanning || isSegmenting}
+                    className="px-6 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl text-xs font-bold flex items-center gap-2 shadow-lg shadow-blue-600/20 transition-all disabled:opacity-50 cursor-pointer"
                   >
-                    {isScanning ? (
+                    {isScanning || isSegmenting ? (
                       <>
                         <RefreshCw className="w-4 h-4 animate-spin" />
-                        <span>{isAr ? "جاري سحب المستند..." : "Scanning HP Hardware..."}</span>
+                        <span>{isSegmenting ? (isAr ? "جاري القص والتجزئة..." : "Segmenting...") : (isAr ? "جاري سحب المستند..." : "Scanning HP Hardware...")}</span>
                       </>
                     ) : (
                       <>
                         <Printer className="w-4 h-4" />
                         <span>
-                          {isBatchMode || paperSource === "feeder"
+                          {workflowMode === "FLATBED_MULTI_CHEQUE"
+                            ? isAr
+                              ? "بدء مسح السطح الزجاجي (Multi-Cheque)"
+                              : "Scan Flatbed (Multi-Cheque)"
+                            : workflowMode === "ADF_BATCH"
                             ? isAr
                               ? "بدء سحب الدفعة (ADF Batch)"
                               : "Start ADF Batch Scan"
@@ -857,7 +1137,7 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
                   <button
                     type="button"
                     onClick={handleRescan}
-                    className="px-4 py-2.5 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-800 dark:text-slate-200 rounded-xl text-xs font-bold flex items-center gap-2 transition-all"
+                    className="px-4 py-2.5 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-800 dark:text-slate-200 rounded-xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer"
                   >
                     <RefreshCw className="w-4 h-4" />
                     <span>{isAr ? "إعادة المسح" : "Rescan"}</span>
@@ -865,11 +1145,15 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
                   <button
                     type="button"
                     onClick={handleConfirm}
-                    className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-2 shadow-lg shadow-emerald-600/20 transition-all"
+                    className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-2 shadow-lg shadow-emerald-600/20 transition-all cursor-pointer"
                   >
                     <Check className="w-4 h-4" />
                     <span>
-                      {batchPages.length > 1
+                      {workflowMode === "FLATBED_MULTI_CHEQUE" && segmentedCheques.length > 0
+                        ? isAr
+                          ? `اعتماد الشيكات المقتطعة (${segmentedCheques.length})`
+                          : `Confirm Cropped Cheques (${segmentedCheques.length})`
+                        : batchPages.length > 1
                         ? isAr
                           ? `اعتماد دفعة الشيكات (${batchPages.length})`
                           : `Confirm Batch (${batchPages.length})`

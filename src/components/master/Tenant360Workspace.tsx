@@ -28,6 +28,7 @@ import {
   Scale,
   Eye,
   Camera,
+  TrendingUp,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { useData } from "../../context/DataContext";
@@ -37,6 +38,7 @@ import { OfficePrintHeader } from "../common/OfficePrintHeader";
 import { DocumentPreviewModal } from "../common/DocumentPreviewModal";
 import { DocumentScanner } from "../common/DocumentScanner";
 import { Tenant, Lease, Property, Unit, Cheque, CollectionRecord, MaintenanceRequest, RentalCase, CollectionAction, PaymentPromise, ElectronicArchiveItem, DocumentCategory } from "../../types";
+import { TenantOccupancyAnalytics } from "./TenantOccupancyAnalytics";
 
 interface Tenant360WorkspaceProps {
   tenantId: string;
@@ -75,6 +77,7 @@ export const Tenant360Workspace: React.FC<Tenant360WorkspaceProps> = ({
 
   const [activeTab, setActiveTab] = useState<
     | "overview"
+    | "analytics"
     | "leases"
     | "payments"
     | "cheques"
@@ -320,6 +323,7 @@ export const Tenant360Workspace: React.FC<Tenant360WorkspaceProps> = ({
       <div className="flex items-center gap-1.5 overflow-x-auto pb-2 scrollbar-thin border-b border-slate-200 dark:border-slate-800">
         {[
           { id: "overview", labelAr: "نظرة عامة والمخاطر", labelEn: "Overview & Risk", icon: Users, count: null },
+          { id: "analytics", labelAr: "تحليلات الإشغال والعقود", labelEn: "Occupancy & Leases", icon: TrendingUp, count: tenantLeases.length },
           { id: "leases", labelAr: "العقود الإيجارية", labelEn: "Leases", icon: FileText, count: tenantLeases.length },
           { id: "payments", labelAr: "سندات القبض", labelEn: "Receipts", icon: Receipt, count: tenantPayments.length },
           { id: "cheques", labelAr: "الشيكات", labelEn: "Cheques", icon: DollarSign, count: tenantCheques.length },
@@ -514,10 +518,34 @@ export const Tenant360Workspace: React.FC<Tenant360WorkspaceProps> = ({
               </div>
             </div>
           </div>
+
+          {/* Interactive Tenant Occupancy & Lease History Analytics */}
+          <TenantOccupancyAnalytics
+            tenant={tenant}
+            leases={leases}
+            units={units}
+            properties={properties}
+            cheques={cheques}
+            collections={collections}
+            onNavigateToUnit={onNavigateToUnit}
+          />
         </div>
       )}
 
-      {/* 2. LEASES TAB */}
+      {/* 2. DEDICATED ANALYTICS TAB */}
+      {activeTab === "analytics" && (
+        <TenantOccupancyAnalytics
+          tenant={tenant}
+          leases={leases}
+          units={units}
+          properties={properties}
+          cheques={cheques}
+          collections={collections}
+          onNavigateToUnit={onNavigateToUnit}
+        />
+      )}
+
+      {/* 3. LEASES TAB */}
       {activeTab === "leases" && (
         <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-4">
           <h3 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2">

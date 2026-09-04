@@ -180,11 +180,26 @@ if ($Action -eq "scan") {
 # True ADF Batch Scan
 if ($Action -eq "scan-batch") {
     $device = Connect-TargetScanner -targetId $ScannerId
+    
+    # Check if separate Feeder item exists in device items collection
     $item = $device.Items.Item(1)
+    if ($device.Items.Count -gt 1) {
+        foreach ($subItem in $device.Items) {
+            try {
+                $flags = $subItem.Properties.Item("4120").Value
+                if (($flags -band 2) -or ($flags -band 0x00000002)) {
+                    $item = $subItem
+                    break
+                }
+            } catch {}
+        }
+    }
 
-    # Force Feeder source: 3088 = 2
+    # Force Feeder source on device level: 3088 = 2
+    $isFeederSupported = $false
     try {
         $device.Properties.Item("3088").Value = 2
+        $isFeederSupported = $true
     } catch {
         # Fallback if driver uses flatbed default
     }
@@ -205,6 +220,12 @@ if ($Action -eq "scan-batch") {
             }
             $image.SaveFile($pageOutFile)
             $scannedFiles += $pageOutFile
+
+            # If device does not support ADF feeder and scanned flatbed, stop after 1 page
+            if (-not $isFeederSupported -and $scannedFiles.Count -ge 1) {
+                $completedReason = "SINGLE_PAGE_FLATBED"
+                break
+            }
         } catch {
             $msg = $_.Exception.Message
             $hres = ("0x{0:X8}" -f ($_.Exception.HResult -band 0xFFFFFFFF))

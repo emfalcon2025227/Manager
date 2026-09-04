@@ -15,8 +15,11 @@ import {
   Maximize2,
   Minimize2,
   Trash2,
-  Image as ImageIcon
+  Image as ImageIcon,
+  RotateCw,
+  Crop
 } from "lucide-react";
+import { DocumentAutoCropper } from "../../utils/documentAutoCropper";
 import { Modal } from "../common/Modal";
 import { useData } from "../../context/DataContext";
 import { useLanguage } from "../../context/LanguageContext";
@@ -102,6 +105,8 @@ export const SmartDocumentCaptureModal: React.FC<SmartDocumentCaptureModalProps>
   
   const [isFullscreenPreview, setIsFullscreenPreview] = useState(false);
   const [isOptimizing, setIsOptimizing] = useState(false);
+  const [originalSourceImage, setOriginalSourceImage] = useState<string | null>(null);
+  const [wasAutoCropped, setWasAutoCropped] = useState(false);
 
   // Stop camera when closed or state changes
   useEffect(() => {
@@ -167,20 +172,87 @@ export const SmartDocumentCaptureModal: React.FC<SmartDocumentCaptureModalProps>
     }
   };
 
-  const handleScannerResult = (base64String: string, mime: string) => {
-    handleImageReady(`data:${mime};base64,${base64String}`, mime);
+  const handleScannerResult = async (base64String: string, mime: string) => {
+    let clean = (base64String || "").trim();
+    if (clean.startsWith("data:")) {
+      await handleImageReady(clean, mime || "image/jpeg");
+    } else {
+      await handleImageReady(`data:${mime || "image/jpeg"};base64,${clean}`, mime || "image/jpeg");
+    }
   };
 
-  const handleImageReady = (dataUrl: string, mime: string) => {
+  const handleImageReady = async (dataUrl: string, mime: string) => {
     stopCamera();
-    setSourceImage(dataUrl);
-    setSourceMime(mime);
+    let normalized = (dataUrl || "").trim();
+    while (normalized.startsWith("data:") && normalized.indexOf("data:", 5) !== -1) {
+      normalized = normalized.substring(normalized.indexOf("data:", 5));
+    }
+
+    setOriginalSourceImage(normalized);
+
+    let finalUrl = normalized;
+    let cropped = false;
+    const docType = documentType === "EMIRATES_ID" ? "EMIRATES_ID" : documentType === "CHEQUE" ? "CHEQUE" : "GENERAL";
+
+    try {
+      const cropRes = await DocumentAutoCropper.autoCropDocument(normalized, docType);
+      if (cropRes && cropRes.wasCropped) {
+        finalUrl = cropRes.dataUrl;
+        cropped = true;
+      }
+    } catch (cropErr) {
+      console.warn("[SmartDocumentCaptureModal] Auto-crop fallback to original:", cropErr);
+    }
+
+    setWasAutoCropped(cropped);
+    setSourceImage(finalUrl);
+    setSourceMime(mime || "image/jpeg");
     setState("PREVIEW");
     // Run an immediate background quality check for the UI
-    checkImageQuality(dataUrl).then(res => {
+    checkImageQuality(finalUrl).then(res => {
       setQualityResult(res);
       setQualityStatus(mapScoreToStatus(res.score, res.isAcceptable));
     });
+  };
+
+  const handleRotate = async () => {
+    if (!sourceImage) return;
+    try {
+      const rotated = await DocumentAutoCropper.rotateImage(sourceImage, 90);
+      setSourceImage(rotated);
+      const res = await checkImageQuality(rotated);
+      setQualityResult(res);
+      setQualityStatus(mapScoreToStatus(res.score, res.isAcceptable));
+    } catch (e) {
+      console.warn("Rotate failed:", e);
+    }
+  };
+
+  const handleToggleAutoCrop = async () => {
+    if (!originalSourceImage) return;
+    if (wasAutoCropped) {
+      setSourceImage(originalSourceImage);
+      setWasAutoCropped(false);
+      checkImageQuality(originalSourceImage).then(res => {
+        setQualityResult(res);
+        setQualityStatus(mapScoreToStatus(res.score, res.isAcceptable));
+      });
+    } else {
+      const docType = documentType === "EMIRATES_ID" ? "EMIRATES_ID" : documentType === "CHEQUE" ? "CHEQUE" : "GENERAL";
+      try {
+        const res = await DocumentAutoCropper.autoCropDocument(originalSourceImage, docType);
+        if (res && res.wasCropped) {
+          setSourceImage(res.dataUrl);
+          setWasAutoCropped(true);
+          checkImageQuality(res.dataUrl).then(q => {
+            setQualityResult(q);
+            setQualityStatus(mapScoreToStatus(q.score, q.isAcceptable));
+          });
+        }
+      } catch (e) {
+        console.warn("Auto-crop failed:", e);
+      }
+    }
   };
 
   const mapScoreToStatus = (score: number, isAcceptable: boolean): ImageQualityStatus => {
@@ -347,8 +419,11 @@ export const SmartDocumentCaptureModal: React.FC<SmartDocumentCaptureModalProps>
     setErrorMsg(null);
 
     try {
-      let b64 = imageForOcr;
-      if (b64.includes(",")) b64 = b64.split(",")[1];
+      let b64 = imageForOcr || "";
+      if (b64.includes(",")) {
+        b64 = b64.substring(b64.lastIndexOf(",") + 1);
+      }
+      b64 = b64.replace(/[\r\n\s]/g, "");
 
       const startTime = Date.now();
       const res = await extractDocumentOCR(documentType, b64, sourceMime);
@@ -661,24 +736,57 @@ export const SmartDocumentCaptureModal: React.FC<SmartDocumentCaptureModalProps>
                     {errorMsg}
                   </p>
                 </div>
-                <button
-                  onClick={handleRetake}
-                  className="px-8 py-3 bg-rose-600 text-white rounded-xl text-sm font-black hover:bg-rose-700 transition-all shadow-md active:scale-95"
-                >
-                  {isAr ? "إعادة المحاولة" : "Try Again"}
-                </button>
+                <div className="flex flex-wrap gap-4 justify-center">
+                  <button
+                    onClick={processAI}
+                    className="px-6 py-2.5 bg-slate-900 text-white rounded-xl text-sm font-black hover:bg-black transition-all shadow-md active:scale-95 flex items-center gap-2"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                    <span>{isAr ? "إعادة محاولة القراءة" : "Retry Extraction"}</span>
+                  </button>
+                  <button
+                    onClick={handleRetake}
+                    className="px-6 py-2.5 bg-rose-100 text-rose-800 rounded-xl text-sm font-black hover:bg-rose-200 transition-all active:scale-95"
+                  >
+                    {isAr ? "إعادة التقاط المستند" : "Retake Document"}
+                  </button>
+                </div>
               </div>
             )}
 
             {state === "PREVIEW" && (
-              <div className="flex justify-between items-center p-2">
-                <button
-                  onClick={handleRetake}
-                  className="flex items-center gap-2 px-6 py-3 border border-slate-300 text-slate-700 rounded-xl hover:bg-slate-50 font-black transition-all"
-                >
-                  <Trash2 className="w-4 h-4" />
-                  <span>{isAr ? "حذف والتقاط جديد" : "Discard & Retake"}</span>
-                </button>
+              <div className="flex flex-wrap justify-between items-center gap-4 p-2">
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={handleRetake}
+                    className="flex items-center gap-2 px-4 py-2.5 border border-slate-300 text-slate-700 rounded-xl hover:bg-slate-50 font-black text-sm transition-all"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    <span>{isAr ? "حذف والتقاط جديد" : "Discard & Retake"}</span>
+                  </button>
+                  <button
+                    onClick={handleRotate}
+                    className="flex items-center gap-2 px-4 py-2.5 border border-slate-300 text-slate-700 rounded-xl hover:bg-slate-50 font-black text-sm transition-all"
+                    title={isAr ? "تدوير المستند 90 درجة" : "Rotate 90 degrees"}
+                  >
+                    <RotateCw className="w-4 h-4" />
+                    <span>{isAr ? "تدوير 90°" : "Rotate"}</span>
+                  </button>
+                  {originalSourceImage && (
+                    <button
+                      onClick={handleToggleAutoCrop}
+                      className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-black text-sm border transition-all ${
+                        wasAutoCropped 
+                          ? "bg-emerald-50 border-emerald-300 text-emerald-700 hover:bg-emerald-100" 
+                          : "border-slate-300 text-slate-700 hover:bg-slate-50"
+                      }`}
+                      title={isAr ? "تبديل القص التلقائي للهوامش" : "Toggle auto crop boundaries"}
+                    >
+                      <Crop className="w-4 h-4 text-emerald-600" />
+                      <span>{wasAutoCropped ? (isAr ? "قص تلقائي (مفعّل)" : "Cropped") : (isAr ? "قص الهوامش" : "Auto Crop")}</span>
+                    </button>
+                  )}
+                </div>
                 
                 <div className="flex gap-4">
                   <div className="hidden lg:flex flex-col items-end justify-center px-4 border-r border-slate-200">

@@ -27,6 +27,9 @@ export type ViewState =
   | "SETTINGS"
   | "ADMIN_CENTER"
   | "TENANT_PORTAL"
+  | "OWNER_PORTAL"
+  | "COMMUNICATION_CENTER"
+  | "PROPERTY_REVIEW"
   | "PROPERTY_OPERATIONS"
   | "DOCUMENT_CONTROL"
   | "TASK_CENTER"
@@ -43,7 +46,9 @@ export type UserRole =
   | "LEGAL"
   | "PROPERTY_MANAGER"
   | "DATA_ENTRY"
-  | "TENANT";
+  | "TENANT"
+  | "OWNER"
+  | "PROPERTY_OWNER";
 
 export interface UserPermissionOverride {
   id: string;
@@ -68,6 +73,7 @@ export interface User {
   role: UserRole;
   phone?: string;
   tenantId?: string;
+  ownerId?: string;
   permissions?: (Permission | string)[];
   userPermissionOverrides?: UserPermissionOverride[];
   isActive: boolean;
@@ -164,6 +170,7 @@ export type Permission =
   | "DELETE_RECORDS"
   | "EDIT_SAVED_FINANCIAL_RECORDS"
   | "TENANT_VIEW_OWN_DATA"
+  | "OWNER_VIEW_OWN_DATA"
   | "VIEW_OFFICE_PETTY_CASH"
   | "CREATE_OFFICE_PETTY_CASH_MONTH"
   | "ADD_OFFICE_EXPENSE"
@@ -989,6 +996,7 @@ export interface ElectronicArchiveItem {
   id: string;
   fileName: string;
   category: DocumentCategory;
+  documentType?: string; // e.g. "CHEQUE", "BATCH_SCAN", "EMIRATES_ID", "LEASE"
   recordId: string; // ID of the linked owner/tenant/cheque/case
   recordTitle: string;
   fileType: string;
@@ -1006,8 +1014,14 @@ export interface ElectronicArchiveItem {
   entityId?: string;
   uploadDate?: string;
   driveFileId?: string;
+  cloudFileId?: string;
   driveWebViewLink?: string;
   driveSyncedAt?: string;
+  parentDocumentId?: string; // For linking cropped cheques to parent flatbed scan
+  batchId?: string;
+  sourceRegion?: { x: number; y: number; width: number; height: number };
+  policy?: "SINGLE" | "MULTIPLE" | "REPLACEABLE" | "VERSIONED";
+  version?: number;
   createdAt: string;
   updatedAt?: string;
   syncStatus?: "PENDING" | "UPLOADING" | "SYNCED" | "FAILED" | "REQUIRES_RETRY" | "PENDING_DRIVE_SYNC";
