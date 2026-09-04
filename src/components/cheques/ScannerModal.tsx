@@ -17,20 +17,31 @@ import {
   HelpCircle,
   ExternalLink,
   Zap,
+  Activity,
+  Layers,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { Modal } from "../common/Modal";
-import { scannerService, ScannerDevice } from "../../services/scannerService";
+import {
+  scannerService,
+  ScannerDevice,
+  BridgeHealthStatus,
+  BatchScanPage,
+} from "../../services/scannerService";
 import {
   downloadHPBridgeBatchLauncher,
   downloadHPBridgePs1Script,
   getPowerShellOneLiner,
 } from "../../services/hpScannerBridgeGenerator";
+import { ScannerDiagnosticsModal } from "../scanner/ScannerDiagnosticsModal";
 import { useLanguage } from "../../context/LanguageContext";
 
 export interface ScannerModalProps {
   isOpen: boolean;
   onClose: () => void;
   onScanComplete: (imageBase64: string, mimeType: string) => void;
+  onBatchScanComplete?: (pages: { imageBase64: string; mimeType: string }[]) => void;
   documentType?: string;
 }
 
@@ -38,51 +49,60 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
   isOpen,
   onClose,
   onScanComplete,
+  onBatchScanComplete,
   documentType,
 }) => {
   const { language } = useLanguage();
   const isAr = language === "ar";
-  
+
   const [devices, setDevices] = useState<ScannerDevice[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>("");
-  
+
   // Settings
   const [resolutionDpi, setResolutionDpi] = useState<number>(300);
   const [colorMode, setColorMode] = useState<"COLOR" | "GRAYSCALE" | "MONO">("COLOR");
-  const [paperSource, setPaperSource] = useState<"auto" | "flatbed" | "feeder">("auto");
+  const [paperSource, setPaperSource] = useState<"auto" | "flatbed" | "feeder">(
+    documentType === "BATCH_CHEQUES" ? "feeder" : "auto"
+  );
   const [autoCrop, setAutoCrop] = useState<boolean>(true);
-  const [paperSize, setPaperSize] = useState<string>("A4");
-  
+  const [paperSize, setPaperSize] = useState<string>(
+    documentType === "BATCH_CHEQUES" || documentType === "CHEQUE" ? "CHEQUE" : "A4"
+  );
+  const [isBatchMode, setIsBatchMode] = useState<boolean>(documentType === "BATCH_CHEQUES");
+
   // State
   const [isScanning, setIsScanning] = useState(false);
   const [scanStatusMsg, setScanStatusMsg] = useState("");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [showBridgeHelp, setShowBridgeHelp] = useState(false);
+  const [showDiagnosticsModal, setShowDiagnosticsModal] = useState(false);
   const [copiedCommand, setCopiedCommand] = useState(false);
-  
-  // Webcam fallback for visual feedback before scan
+
+  // Webcam fallback for visual feedback
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [cameraActive, setCameraActive] = useState(false);
 
-  // Result
+  // Results
   const [scanResult, setScanResult] = useState<{ imageBase64: string; mimeType: string } | null>(null);
+  const [batchPages, setBatchPages] = useState<BatchScanPage[]>([]);
+  const [selectedBatchPageIndex, setSelectedBatchPageIndex] = useState<number>(0);
   const [rotation, setRotation] = useState(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [diagnostics, setDiagnostics] = useState<{
-    erpService: boolean;
-    localBridge: boolean;
-    scannerDevice: boolean;
-    protocol: string;
-    deviceName: string;
-    isHP: boolean;
-  }>({
-    erpService: true,
-    localBridge: false,
-    scannerDevice: false,
-    protocol: "—",
-    deviceName: "—",
-    isHP: false,
+
+  // Live Bridge Health Status
+  const [bridgeHealth, setBridgeHealth] = useState<BridgeHealthStatus>({
+    running: false,
+    bridgeRunning: false,
+    bridgeVersion: "2.2.0",
+    port: 18622,
+    wiaAvailable: false,
+    scannerDetected: false,
+    adfAvailable: false,
+    status: "BRIDGE_OFFLINE",
+    statusCode: "BRIDGE_OFFLINE",
+    hpDetected: false,
+    scanners: [],
   });
 
   useEffect(() => {
@@ -90,49 +110,49 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
       loadDevices();
       startCamera();
       setScanResult(null);
+      setBatchPages([]);
+      setSelectedBatchPageIndex(0);
       setRotation(0);
       setIsFullscreen(false);
       setShowBridgeHelp(false);
+      setIsBatchMode(documentType === "BATCH_CHEQUES");
+
+      // Subscribe to bridge status updates
+      const unsub = scannerService.subscribeStatus((status) => {
+        setBridgeHealth(status);
+      });
+      return () => {
+        unsub();
+        stopCamera();
+      };
     } else {
       stopCamera();
     }
     return () => stopCamera();
-  }, [isOpen]);
+  }, [isOpen, documentType]);
 
   const loadDevices = async () => {
-    const list = await scannerService.getAvailableScanners();
+    const list = await scannerService.getAvailableScanners(true);
     setDevices(list);
     if (list.length > 0) {
-      // Prefer HP or WIA devices first
-      const hpDev = list.find((d) => d.isHP || d.type === "TWAIN_WIA_BRIDGE");
-      setSelectedDeviceId(hpDev ? hpDev.id : list[0].id);
+      // Prefer physical ONLINE WIA devices first
+      const activeDev = list.find((d) => d.status === "ONLINE" && d.type === "TWAIN_WIA_BRIDGE");
+      setSelectedDeviceId(activeDev ? activeDev.id : list[0].id);
     }
-
-    // Diagnostics check
-    const status = await scannerService.checkBridgeStatus();
-    const isHP = status.hpDetected || (status.hpDeviceName || "").toLowerCase().includes("hp");
-    
-    setDiagnostics({
-      erpService: true,
-      localBridge: status.running,
-      scannerDevice: status.scanners.length > 0,
-      protocol: status.running ? "WIA / TWAIN / eSCL" : "—",
-      deviceName: status.hpDeviceName || (status.scanners.length > 0 ? status.scanners[0].name : "HP Color LaserJet Pro MFP M282nw"),
-      isHP,
-    });
+    const health = await scannerService.checkBridgeStatus(true);
+    setBridgeHealth(health);
   };
 
   const startCamera = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } } 
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } },
       });
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         setCameraActive(true);
       }
     } catch (err) {
-      console.warn("Camera not available for preview:", err);
       setCameraActive(false);
     }
   };
@@ -150,38 +170,63 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
     setIsScanning(true);
     setErrorMsg(null);
     setScanResult(null);
+    setBatchPages([]);
     setRotation(0);
+
+    const useBatch = isBatchMode || paperSource === "feeder" || documentType === "BATCH_CHEQUES";
+
     setScanStatusMsg(
-      isAr
-        ? "جاري إرسال أمر السحب الميكانيكي إلى ماسح HP M282nw..."
-        : "Sending scan command to HP M282nw Scanner..."
+      useBatch
+        ? (isAr ? "جاري سحب دفعة المستندات من وحدة التغذية (ADF)..." : "Scanning document batch from ADF feeder...")
+        : (isAr ? "جاري إرسال أمر السحب إلى طابعة HP M282nw..." : "Sending scan command to HP M282nw Scanner...")
     );
 
     try {
-      await new Promise((resolve) => setTimeout(resolve, 600));
-      setScanStatusMsg(
-        isAr
-          ? "جاري سحب ومسح المستند ضوئياً بدقة عالية..."
-          : "Scanning document in high resolution..."
-      );
-      
-      const scanRes = await scannerService.acquireScan({
-        deviceId: selectedDeviceId,
-        resolutionDpi,
-        colorMode,
-        autoCrop,
-        paperSource,
-      });
+      if (useBatch) {
+        // Multi-page ADF Batch Scan
+        const batchRes = await scannerService.acquireBatchScan({
+          deviceId: selectedDeviceId,
+          resolutionDpi,
+          colorMode,
+          paperSource: "feeder",
+          maxPages: 30,
+        });
 
-      if (scanRes.success && scanRes.imageBase64) {
-        setScanResult({ imageBase64: scanRes.imageBase64, mimeType: scanRes.mimeType });
+        if (batchRes.success && batchRes.pages.length > 0) {
+          setBatchPages(batchRes.pages);
+          setSelectedBatchPageIndex(0);
+          setScanResult({
+            imageBase64: batchRes.pages[0].imageBase64,
+            mimeType: batchRes.pages[0].mimeType,
+          });
+        } else {
+          throw new Error(
+            batchRes.error ||
+              (isAr
+                ? "تعذر سحب الأوراق من وحدة التغذية (ADF). تأكد من وضع المستندات وتشغيل الجسر."
+                : "Could not scan from feeder. Ensure documents are placed and bridge is running.")
+          );
+        }
       } else {
-        throw new Error(
-          scanRes.error ||
-            (isAr
-              ? "تعذر الاتصال بالماسح الضوئي. يرجى تشغيل أداة Start-HP-Scanner.bat."
-              : "Could not connect to scanner. Please launch Start-HP-Scanner.bat.")
-        );
+        // Single Scan
+        const scanRes = await scannerService.acquireScan({
+          deviceId: selectedDeviceId,
+          resolutionDpi,
+          colorMode,
+          autoCrop,
+          paperSource,
+        });
+
+        if (scanRes.success && scanRes.imageBase64) {
+          setScanResult({ imageBase64: scanRes.imageBase64, mimeType: scanRes.mimeType });
+        } else {
+          throw new Error(
+            scanRes.error ||
+              (isAr
+                ? "تعذر الاتصال بالماسح الضوئي. يرجى تشغيل أداة Start-HP-Scanner.bat."
+                : "Could not connect to scanner. Please launch Start-HP-Scanner.bat.")
+          );
+        }
       }
     } catch (err: any) {
       setErrorMsg(
@@ -190,8 +235,7 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
             ? "تعذر الاتصال بالماسح الضوئي."
             : "Could not connect to scanner.")
       );
-      // Auto expand bridge help if not running
-      if (!diagnostics.localBridge) {
+      if (!bridgeHealth.bridgeRunning) {
         setShowBridgeHelp(true);
       }
     } finally {
@@ -200,7 +244,10 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
   };
 
   const handleConfirm = () => {
-    if (scanResult) {
+    if (batchPages.length > 1 && onBatchScanComplete) {
+      onBatchScanComplete(batchPages.map((p) => ({ imageBase64: p.imageBase64, mimeType: p.mimeType })));
+      onClose();
+    } else if (scanResult) {
       onScanComplete(scanResult.imageBase64, scanResult.mimeType);
       onClose();
     }
@@ -208,6 +255,8 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
 
   const handleRescan = () => {
     setScanResult(null);
+    setBatchPages([]);
+    setSelectedBatchPageIndex(0);
     setRotation(0);
     setErrorMsg(null);
   };
@@ -218,451 +267,549 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
     setTimeout(() => setCopiedCommand(false), 3000);
   };
 
+  const renderStatusBadge = () => {
+    switch (bridgeHealth.statusCode) {
+      case "SCANNER_READY":
+        return (
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-500/20 text-emerald-300 rounded-lg text-xs font-mono font-bold border border-emerald-500/30">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            {isAr ? "الماسح متصل وجاهز" : "HP Scanner Connected"}
+          </span>
+        );
+      case "SCANNER_BUSY":
+        return (
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-500/20 text-amber-300 rounded-lg text-xs font-mono font-bold border border-amber-500/30">
+            <RefreshCw className="w-3 h-3 animate-spin" />
+            {isAr ? "الماسح قيد الاستخدام" : "Scanner Busy"}
+          </span>
+        );
+      case "NO_SCANNER_DETECTED":
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-amber-500/20 text-amber-300 rounded-lg text-xs font-bold border border-amber-500/30">
+            <AlertCircle className="w-3.5 h-3.5" />
+            {isAr ? "الجسر متصل – بانتظار الماسح" : "Bridge Online – Scanner Not Found"}
+          </span>
+        );
+      case "WIA_UNAVAILABLE":
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-rose-500/20 text-rose-300 rounded-lg text-xs font-bold border border-rose-500/30">
+            <AlertCircle className="w-3.5 h-3.5" />
+            {isAr ? "خطأ في خدمة WIA" : "WIA Unavailable"}
+          </span>
+        );
+      case "BRIDGE_OFFLINE":
+      default:
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-rose-500/20 text-rose-300 rounded-lg text-xs font-bold border border-rose-500/30">
+            <span className="w-2 h-2 rounded-full bg-rose-400" />
+            {isAr ? "الجسر المحلي غير متصل" : "Local Bridge Offline"}
+          </span>
+        );
+    }
+  };
+
   return (
-    <Modal
-      isOpen={isOpen}
-      onClose={onClose}
-      title={isAr ? "ماسح المستندات المباشر (HP LaserJet MFP Scanner)" : "Direct Document Scanner (HP LaserJet MFP)"}
-    >
-      <div className={`flex flex-col text-slate-800 ${isFullscreen ? "fixed inset-4 z-50 bg-white dark:bg-slate-900 rounded-xl shadow-2xl p-4 overflow-auto" : "space-y-4"}`}>
-        {isFullscreen && (
-           <div className="flex justify-between items-center mb-4">
-             <h2 className="text-xl font-bold dark:text-white">{isAr ? "ماسح المستندات" : "Document Scanner"}</h2>
-             <button onClick={() => setIsFullscreen(false)} className="px-4 py-2 bg-slate-200 dark:bg-slate-700 rounded-lg text-sm">{isAr ? "إغلاق وضع ملء الشاشة" : "Close Fullscreen"}</button>
-           </div>
-        )}
-        
-        {/* Header & Subtitle */}
-        {!isFullscreen && (
-          <div className="bg-gradient-to-r from-slate-900 via-slate-850 to-slate-900 text-white p-3.5 rounded-xl flex items-center justify-between text-xs border border-slate-700/60 shadow-md">
-            <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-lg bg-blue-600/20 border border-blue-500/30 flex items-center justify-center shrink-0">
-                <Printer className="w-5 h-5 text-blue-400" />
-              </div>
-              <div className="flex flex-col">
-                <div className="flex items-center gap-2">
-                  <span className="font-bold text-sm text-slate-100">
-                    {isAr ? "ماسح HP Color LaserJet Pro MFP M282nw" : "HP Color LaserJet Pro MFP M282nw"}
-                  </span>
-                  <span className="px-2 py-0.5 bg-blue-500/20 text-blue-300 rounded text-[10px] font-mono font-semibold">
-                    WIA / USB / Network
+    <>
+      <Modal
+        isOpen={isOpen}
+        onClose={onClose}
+        title={isAr ? "ماسح المستندات المباشر (HP LaserJet MFP Scanner)" : "Direct Document Scanner (HP LaserJet MFP)"}
+      >
+        <div
+          className={`flex flex-col text-slate-800 ${
+            isFullscreen
+              ? "fixed inset-4 z-50 bg-white dark:bg-slate-900 rounded-xl shadow-2xl p-4 overflow-auto"
+              : "space-y-4"
+          }`}
+        >
+          {isFullscreen && (
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-bold dark:text-white">
+                {isAr ? "ماسح المستندات" : "Document Scanner"}
+              </h2>
+              <button
+                onClick={() => setIsFullscreen(false)}
+                className="px-4 py-2 bg-slate-200 dark:bg-slate-700 rounded-lg text-sm"
+              >
+                {isAr ? "إغلاق وضع ملء الشاشة" : "Close Fullscreen"}
+              </button>
+            </div>
+          )}
+
+          {/* Header & Status Bar */}
+          {!isFullscreen && (
+            <div className="bg-gradient-to-r from-slate-900 via-slate-850 to-slate-900 text-white p-3.5 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between text-xs border border-slate-700/60 shadow-md gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-lg bg-blue-600/20 border border-blue-500/30 flex items-center justify-center shrink-0">
+                  <Printer className="w-5 h-5 text-blue-400" />
+                </div>
+                <div className="flex flex-col">
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-sm text-slate-100">
+                      {isAr ? "ماسح HP Color LaserJet Pro MFP M282nw" : "HP Color LaserJet Pro MFP M282nw"}
+                    </span>
+                    <span className="px-2 py-0.5 bg-blue-500/20 text-blue-300 rounded text-[10px] font-mono font-semibold">
+                      WIA / ADF / USB / Network
+                    </span>
+                  </div>
+                  <span className="text-slate-400 text-[11px] mt-0.5">
+                    {isAr
+                      ? "مسح الشيكات والمستندات وعقود الإيجار مباشرة من درج السحب (ADF) أو السطح الزجاجي"
+                      : "Direct hardware scanning from feeder (ADF) or flatbed glass"}
                   </span>
                 </div>
-                <span className="text-slate-400 text-[11px] mt-0.5">
-                  {isAr
-                    ? "مسح الشيكات والمستندات وعقود الإيجار مباشرة من درج السحب أو السطح المسطح"
-                    : "Direct hardware scanning from feeder (ADF) or flatbed glass"}
-                </span>
               </div>
-            </div>
-            
-            <div className="flex flex-col items-end text-right">
-              {diagnostics.localBridge ? (
-                <>
-                  <span className="px-2.5 py-1 bg-emerald-500/20 text-emerald-300 rounded-lg flex items-center gap-1.5 font-mono font-bold text-xs border border-emerald-500/30 mb-1">
-                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                    {isAr ? "الماسح متصل وجاهز" : "HP Scanner Connected"}
-                  </span>
-                  <span className="text-[10px] text-slate-400 max-w-[180px] truncate font-mono">
-                    {diagnostics.deviceName}
-                  </span>
-                </>
-              ) : (
-                <>
+
+              <div className="flex items-center gap-2">
+                {renderStatusBadge()}
+
+                <button
+                  type="button"
+                  onClick={() => setShowDiagnosticsModal(true)}
+                  className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg flex items-center gap-1.5 font-semibold text-xs border border-slate-700 transition-colors"
+                  title={isAr ? "فتح مركز تشخيص الاتصال" : "Open Diagnostics"}
+                >
+                  <Activity className="w-3.5 h-3.5 text-indigo-400" />
+                  <span>{isAr ? "التشخيص" : "Diagnostics"}</span>
+                </button>
+
+                {!bridgeHealth.bridgeRunning && (
                   <button
                     onClick={() => setShowBridgeHelp(!showBridgeHelp)}
-                    className="px-2.5 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 rounded-lg flex items-center gap-1.5 font-bold text-[11px] border border-amber-500/30 mb-1 transition-all"
+                    className="px-2.5 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 rounded-lg flex items-center gap-1.5 font-bold text-xs border border-amber-500/30 transition-all"
                   >
                     <Zap className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
-                    {isAr ? "تشغيل جسر HP المحلي" : "Launch HP Bridge"}
+                    {isAr ? "تشغيل الجسر" : "Start Bridge"}
                   </button>
-                  <button onClick={loadDevices} className="text-[10px] text-blue-400 hover:underline flex items-center gap-1">
-                    <RefreshCw className="w-2.5 h-2.5" />
-                    {isAr ? "إعادة فحص الاتصال" : "Refresh"}
-                  </button>
-                </>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Bridge Helper & Download Drawer */}
-        {showBridgeHelp && !scanResult && (
-          <div className="bg-slate-900 border border-blue-500/40 rounded-xl p-4 text-xs text-slate-200 space-y-3 animate-in fade-in duration-200">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
-              <div className="flex items-center gap-2">
-                <Shield className="w-4 h-4 text-blue-400" />
-                <span className="font-bold text-sm text-white">
-                  {isAr ? "دليل ربط طابعة HP M282nw بنقرة واحدة" : "HP M282nw 1-Click Quick Connect Guide"}
-                </span>
+                )}
               </div>
-              <button
-                onClick={() => setShowBridgeHelp(false)}
-                className="text-slate-400 hover:text-white text-xs px-2 py-0.5 rounded bg-slate-800"
-              >
-                {isAr ? "إخفاء" : "Hide"}
-              </button>
             </div>
+          )}
 
-            <p className="text-slate-300 text-xs leading-relaxed">
-              {isAr
-                ? "لإرسال أوامر المسح الضوئي المباشرة من المتصفح إلى طابعتك HP Color LaserJet Pro MFP M282nw، قمنا بإنشاء أداة تشغيل خفيفة وآمنة (Zero-Install Bridge) تعمل في خلفية نظام التشغيل:"
-                : "To send direct hardware scan commands from the browser to your HP M282nw printer, use our lightweight zero-install background bridge:"}
-            </p>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-1">
-              <div className="bg-slate-950 p-3 rounded-lg border border-slate-800 flex flex-col justify-between">
-                <div>
-                  <div className="font-bold text-emerald-400 mb-1 flex items-center gap-1.5">
-                    <Download className="w-4 h-4" />
-                    {isAr ? "الخيار 1: تنزيل ملف التشغيل المحدث (.bat)" : "Option 1: Download Self-Contained (.bat)"}
-                  </div>
-                  <p className="text-slate-400 text-[11px] mb-2">
-                    {isAr
-                      ? "ملف تنفيذي مدمج بالكامل وبدون إغلاق فوري. نزّله وافتحه بنقرة واحدة."
-                      : "Self-contained hybrid launcher with error guard & auto-pause."}
-                  </p>
+          {/* Bridge Helper & Download Drawer */}
+          {showBridgeHelp && !scanResult && (
+            <div className="bg-slate-900 border border-blue-500/40 rounded-xl p-4 text-xs text-slate-200 space-y-3 animate-in fade-in duration-200">
+              <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                <div className="flex items-center gap-2">
+                  <Shield className="w-4 h-4 text-blue-400" />
+                  <span className="font-bold text-sm text-white">
+                    {isAr ? "دليل تشغيل جسر الماسح الضوئي بنقرة واحدة" : "Scanner Bridge 1-Click Launcher"}
+                  </span>
                 </div>
                 <button
-                  type="button"
-                  onClick={downloadHPBridgeBatchLauncher}
-                  className="w-full py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-bold flex items-center justify-center gap-2 text-xs shadow transition-all cursor-pointer"
+                  onClick={() => setShowBridgeHelp(false)}
+                  className="text-slate-400 hover:text-white text-xs px-2 py-0.5 rounded bg-slate-800"
                 >
-                  <Download className="w-4 h-4" />
-                  <span>{isAr ? "تنزيل Start-HP-Scanner.bat" : "Download Start-HP-Scanner.bat"}</span>
+                  {isAr ? "إخفاء" : "Hide"}
                 </button>
               </div>
 
-              <div className="bg-slate-950 p-3 rounded-lg border border-slate-800 flex flex-col justify-between">
-                <div>
-                  <div className="font-bold text-blue-400 mb-1 flex items-center gap-1.5">
+              <p className="text-slate-300 text-xs leading-relaxed">
+                {isAr
+                  ? "لإرسال أوامر المسح الضوئي المباشرة من المتصفح إلى طابعتك HP Color LaserJet Pro MFP M282nw عبر WIA، قمنا بتجهيز ملف تشغيل مدمج:"
+                  : "To send direct hardware scan commands from the browser to your HP M282nw scanner via WIA, run the bridge launcher:"}
+              </p>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-1">
+                <div className="bg-slate-950 p-3 rounded-lg border border-slate-800 flex flex-col justify-between">
+                  <div>
+                    <div className="font-bold text-emerald-400 mb-1 flex items-center gap-1.5">
+                      <Download className="w-4 h-4" />
+                      {isAr ? "الخيار 1: ملف التشغيل المحدث (.bat)" : "Option 1: Self-Contained Launcher (.bat)"}
+                    </div>
+                    <p className="text-slate-400 text-[11px] mb-2">
+                      {isAr
+                        ? "ملف تنفيذي مدمج لا يغلق تلقائياً ويدعم المسح الفردي ودفعة ADF."
+                        : "All-in-one launcher supporting single scan and ADF batch."}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={downloadHPBridgeBatchLauncher}
+                    className="w-full py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-bold flex items-center justify-center gap-2 text-xs shadow transition-all cursor-pointer"
+                  >
                     <Download className="w-4 h-4" />
-                    {isAr ? "الخيار 2: ملف PowerShell (.ps1)" : "Option 2: PowerShell Script (.ps1)"}
-                  </div>
-                  <p className="text-slate-400 text-[11px] mb-2">
-                    {isAr
-                      ? "ملف سكريبت مباشر، انقر عليه بزر الفأرة الأيمن واختر (Run with PowerShell)."
-                      : "Direct script: Right-click -> Run with PowerShell."}
-                  </p>
+                    <span>{isAr ? "تنزيل Start-HP-Scanner.bat" : "Download Start-HP-Scanner.bat"}</span>
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={downloadHPBridgePs1Script}
-                  className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg font-bold flex items-center justify-center gap-2 text-xs shadow transition-all cursor-pointer"
+
+                <div className="bg-slate-950 p-3 rounded-lg border border-slate-800 flex flex-col justify-between">
+                  <div>
+                    <div className="font-bold text-blue-400 mb-1 flex items-center gap-1.5">
+                      <Download className="w-4 h-4" />
+                      {isAr ? "الخيار 2: سكريبت PowerShell (.ps1)" : "Option 2: PowerShell Script (.ps1)"}
+                    </div>
+                    <p className="text-slate-400 text-[11px] mb-2">
+                      {isAr
+                        ? "ملف سكريبت نقي: انقر عليه بزر الفأرة الأيمن واختر (Run with PowerShell)."
+                        : "Run directly in PowerShell without intermediate wrapper."}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={downloadHPBridgePs1Script}
+                    className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg font-bold flex items-center justify-center gap-2 text-xs shadow transition-all cursor-pointer"
+                  >
+                    <Download className="w-4 h-4" />
+                    <span>{isAr ? "تنزيل hp-scanner-bridge.ps1" : "Download .ps1"}</span>
+                  </button>
+                </div>
+
+                <div className="bg-slate-950 p-3 rounded-lg border border-slate-800 flex flex-col justify-between">
+                  <div>
+                    <div className="font-bold text-amber-400 mb-1 flex items-center gap-1.5">
+                      <Activity className="w-4 h-4" />
+                      {isAr ? "الخيار 3: مركز التشخيص المتقدم" : "Option 3: Diagnostics Center"}
+                    </div>
+                    <p className="text-slate-400 text-[11px] mb-2 font-mono">
+                      127.0.0.1:18622
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowDiagnosticsModal(true)}
+                      className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg font-bold flex items-center justify-center gap-1.5 text-xs transition-all cursor-pointer"
+                    >
+                      <Activity className="w-3.5 h-3.5 text-indigo-400" />
+                      <span>{isAr ? "بدء الفحص" : "Test"}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleCopyCommand}
+                      className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg font-bold flex items-center justify-center gap-1 text-xs cursor-pointer"
+                      title={isAr ? "نسخ أمر الفحص" : "Copy Command"}
+                    >
+                      {copiedCommand ? <CheckCircle2 className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Settings Controls */}
+          {!scanResult && (
+            <div className="grid grid-cols-2 md:grid-cols-6 gap-2 bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl border border-slate-200 dark:border-slate-700 text-xs">
+              <div className="col-span-2 md:col-span-2">
+                <label className="block text-slate-600 dark:text-slate-400 font-bold mb-1">
+                  {isAr ? "الماسح / الطابعة المحددة" : "Selected Scanner"}
+                </label>
+                <select
+                  value={selectedDeviceId}
+                  onChange={(e) => setSelectedDeviceId(e.target.value)}
+                  disabled={isScanning}
+                  className="w-full bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-lg p-1.5 font-medium dark:text-white text-xs"
                 >
-                  <Download className="w-4 h-4" />
-                  <span>{isAr ? "تنزيل HP-Scanner-Bridge.ps1" : "Download .ps1"}</span>
-                </button>
+                  {devices.map((dev) => (
+                    <option key={dev.id} value={dev.id}>
+                      {dev.name} {dev.status === "OFFLINE" ? `(${isAr ? "غير متصل" : "Offline"})` : `(${isAr ? "متصل" : "Online"})`}
+                    </option>
+                  ))}
+                </select>
               </div>
 
-              <div className="bg-slate-950 p-3 rounded-lg border border-slate-800 flex flex-col justify-between">
-                <div>
-                  <div className="font-bold text-amber-400 mb-1 flex items-center gap-1.5">
-                    <RefreshCw className="w-4 h-4" />
-                    {isAr ? "الخيار 3: فحص حالة المنفذ" : "Option 3: Test Bridge Port"}
-                  </div>
-                  <p className="text-slate-400 text-[11px] mb-2 font-mono">
-                    http://127.0.0.1:18622
-                  </p>
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={loadDevices}
-                    className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg font-bold flex items-center justify-center gap-1.5 text-xs transition-all cursor-pointer"
-                  >
-                    <RefreshCw className="w-3.5 h-3.5" />
-                    <span>{isAr ? "فحص الاتصال" : "Check Status"}</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleCopyCommand}
-                    className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg font-bold flex items-center justify-center gap-1 text-xs cursor-pointer"
-                    title={isAr ? "نسخ رابط التشخيص" : "Copy Diagnostics URL"}
-                  >
-                    {copiedCommand ? <CheckCircle2 className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Diagnostics Box */}
-        {!scanResult && (
-          <div className="bg-slate-100 dark:bg-slate-800/80 p-3 rounded-xl border border-slate-200 dark:border-slate-700 text-[11px] grid grid-cols-2 md:grid-cols-5 gap-3">
-             <div className="flex flex-col">
-               <span className="text-slate-500">{isAr ? "خدمة ERP Scanner" : "ERP Scanner"}</span>
-               <span className="font-mono font-bold text-emerald-600">✓ Ready</span>
-             </div>
-             <div className="flex flex-col">
-               <span className="text-slate-500">{isAr ? "جسر HP المحلي" : "HP Bridge"}</span>
-               <span className={`font-mono font-bold ${diagnostics.localBridge ? 'text-emerald-600' : 'text-amber-600'}`}>
-                 {diagnostics.localBridge ? '✓ Active (18622)' : '⚠️ Offline'}
-               </span>
-             </div>
-             <div className="flex flex-col">
-               <span className="text-slate-500">{isAr ? "حالة الطابعة / الماسح" : "HP Scanner State"}</span>
-               <span className={`font-mono font-bold ${diagnostics.scannerDevice || diagnostics.localBridge ? 'text-emerald-600' : 'text-slate-400'}`}>
-                 {diagnostics.scannerDevice || diagnostics.localBridge ? '✓ Connected' : '—'}
-               </span>
-             </div>
-             <div className="flex flex-col">
-               <span className="text-slate-500">{isAr ? "مصدر الورق" : "Paper Source"}</span>
-               <span className="font-mono font-bold text-slate-700 dark:text-slate-300">
-                 {paperSource === "auto" ? (isAr ? "تلقائي" : "Auto") : paperSource === "feeder" ? (isAr ? "درج ADF" : "ADF Feeder") : (isAr ? "سطح زجاجي" : "Flatbed")}
-               </span>
-             </div>
-             <div className="flex flex-col">
-               <span className="text-slate-500">{isAr ? "الجهاز المستهدف" : "Target Device"}</span>
-               <span className="font-mono font-bold text-slate-700 dark:text-slate-300 truncate" title={diagnostics.deviceName}>
-                 {diagnostics.deviceName}
-               </span>
-             </div>
-          </div>
-        )}
-
-        {/* Settings Controls */}
-        {!scanResult && (
-          <div className="grid grid-cols-2 md:grid-cols-6 gap-2 bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl border border-slate-200 dark:border-slate-700 text-xs">
-            <div className="col-span-2 md:col-span-2">
-              <label className="block text-slate-600 dark:text-slate-400 font-bold mb-1">
-                {isAr ? "الماسح / الطابعة المحددة" : "Selected Scanner"}
-              </label>
-              <select
-                value={selectedDeviceId}
-                onChange={(e) => setSelectedDeviceId(e.target.value)}
-                disabled={isScanning}
-                className="w-full bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-lg p-1.5 font-medium dark:text-white text-xs"
-              >
-                {devices.map((dev) => (
-                  <option key={dev.id} value={dev.id}>
-                    {dev.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-slate-600 dark:text-slate-400 font-bold mb-1">
-                {isAr ? "مسار السحب" : "Paper Source"}
-              </label>
-              <select
-                value={paperSource}
-                onChange={(e) => setPaperSource(e.target.value as any)}
-                disabled={isScanning}
-                className="w-full bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-lg p-1.5 font-medium dark:text-white"
-              >
-                <option value="auto">{isAr ? "تلقائي (Auto)" : "Auto"}</option>
-                <option value="feeder">{isAr ? "درج السحب (ADF)" : "ADF Feeder"}</option>
-                <option value="flatbed">{isAr ? "السطح الزجاجي" : "Flatbed"}</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-slate-600 dark:text-slate-400 font-bold mb-1">
-                {isAr ? "حجم المستند" : "Doc Size"}
-              </label>
-              <select
-                value={paperSize}
-                onChange={(e) => setPaperSize(e.target.value)}
-                disabled={isScanning}
-                className="w-full bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-lg p-1.5 font-medium dark:text-white"
-              >
-                <option value="A4">A4 (عقد/مستند)</option>
-                <option value="CHEQUE">{isAr ? "شيك بنكي (Cheque)" : "Cheque"}</option>
-                <option value="ID">{isAr ? "بطاقة هوية (ID)" : "ID Card"}</option>
-                <option value="AUTO">{isAr ? "تلقائي (Auto)" : "Auto"}</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-slate-600 dark:text-slate-400 font-bold mb-1">
-                {isAr ? "دقة المسح" : "DPI"}
-              </label>
-              <select
-                value={resolutionDpi}
-                onChange={(e) => setResolutionDpi(Number(e.target.value))}
-                disabled={isScanning}
-                className="w-full bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-lg p-1.5 font-medium dark:text-white"
-              >
-                <option value={200}>200 DPI (سريع)</option>
-                <option value={300}>300 DPI (عالي / قياسي)</option>
-                <option value={600}>600 DPI (فائق الدقة)</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-slate-600 dark:text-slate-400 font-bold mb-1">
-                {isAr ? "نمط الألوان" : "Color"}
-              </label>
-              <select
-                value={colorMode}
-                onChange={(e) => setColorMode(e.target.value as any)}
-                disabled={isScanning}
-                className="w-full bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-lg p-1.5 font-medium dark:text-white"
-              >
-                <option value="COLOR">{isAr ? "ألوان (Color)" : "Color"}</option>
-                <option value="GRAYSCALE">{isAr ? "تدرج رمادي" : "Grayscale"}</option>
-                <option value="MONO">{isAr ? "أبيض وأسود" : "B&W"}</option>
-              </select>
-            </div>
-          </div>
-        )}
-
-        {/* Live Framing & Scanning Viewport */}
-        <div className={`relative w-full ${isFullscreen ? "flex-1 min-h-[60vh]" : "h-[58vh] max-h-[480px] min-h-[280px]"} bg-slate-950 rounded-2xl overflow-hidden border-2 border-slate-800 flex items-center justify-center transition-all shadow-inner`}>
-          
-          {/* Controls Overlay */}
-          {scanResult && (
-             <div className="absolute top-4 right-4 flex gap-2 z-30">
-               <button onClick={() => setRotation(r => r - 90)} className="bg-black/60 p-2 rounded-lg text-white hover:bg-black/80 backdrop-blur" title={isAr ? "تدوير يسار" : "Rotate Left"}><RotateCw className="w-5 h-5 -scale-x-100" /></button>
-               <button onClick={() => setRotation(r => r + 90)} className="bg-black/60 p-2 rounded-lg text-white hover:bg-black/80 backdrop-blur" title={isAr ? "تدوير يمين" : "Rotate Right"}><RotateCw className="w-5 h-5" /></button>
-               {!isFullscreen && (
-                  <button onClick={() => setIsFullscreen(true)} className="bg-black/60 p-2 rounded-lg text-white hover:bg-black/80 backdrop-blur" title={isAr ? "ملء الشاشة" : "Fullscreen"}><Maximize2 className="w-5 h-5" /></button>
-               )}
-             </div>
-          )}
-
-          {!scanResult ? (
-            cameraActive ? (
-              <video
-                ref={videoRef}
-                playsInline
-                muted
-                className="w-full h-full object-cover opacity-60"
-              />
-            ) : (
-              <div className="text-center p-6 text-slate-400 space-y-3">
-                <Printer className="w-14 h-14 mx-auto text-blue-500 animate-pulse" />
-                <div className="space-y-1">
-                  <p className="text-sm font-bold text-slate-200">
-                    {isAr
-                      ? "الماسح الضوئي HP Color LaserJet Pro جاهز للاستخدام"
-                      : "HP Color LaserJet Pro MFP Scanner Ready"}
-                  </p>
-                  <p className="text-xs text-slate-400 max-w-sm mx-auto">
-                    {isAr
-                      ? "ضع الشيك أو المستند في درج السحب العلوي (ADF) أو على الزجاج واضغط على [بدء المسح المباشر]."
-                      : "Place document in feeder or glass and click [Start Direct Scan]."}
-                  </p>
-                </div>
-              </div>
-            )
-          ) : (
-            <img 
-               src={scanResult.imageBase64} 
-               alt="Scanned Document" 
-               className="w-full h-full object-contain transition-transform duration-300" 
-               style={{ transform: `rotate(${rotation}deg)` }}
-            />
-          )}
-
-          {/* Dynamic Framing Guide Box based on Paper Size */}
-          {!scanResult && !isScanning && (
-            <div className={`absolute ${paperSize === 'A4' ? 'inset-y-4 inset-x-12' : paperSize === 'ID' ? 'inset-y-24 inset-x-20' : 'inset-y-16 inset-x-8'} border-2 border-dashed border-blue-400/70 rounded-xl pointer-events-none flex flex-col justify-between p-3 transition-all duration-500`}>
-              <div className="flex justify-between items-center text-[10px] text-blue-300 font-mono bg-slate-950/70 px-2 py-0.5 rounded backdrop-blur">
-                <span>HP M282nw • {paperSize} BOUNDARY</span>
-                <span>{resolutionDpi} DPI • {paperSource.toUpperCase()}</span>
-              </div>
-              <div className="text-center text-[11px] text-blue-200 font-bold bg-slate-950/70 px-3 py-1 rounded backdrop-blur self-center">
-                {isAr ? "منطقة المسح الضوئي المباشر" : "Direct Hardware Scan Framing"}
-              </div>
-              <div className="text-right text-[10px] text-blue-300 font-mono bg-slate-950/70 px-2 py-0.5 rounded backdrop-blur self-end">
-                HP LASERJET ENGINE
-              </div>
-            </div>
-          )}
-
-          {/* Scanning Overlay State */}
-          {isScanning && (
-            <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-sm flex flex-col items-center justify-center text-white z-20 space-y-4">
-              <div className="relative">
-                <Printer className="w-12 h-12 text-blue-400 animate-bounce" />
-                <RefreshCw className="w-6 h-6 text-emerald-400 animate-spin absolute -bottom-1 -right-1" />
-              </div>
-              <p className="font-bold text-sm text-blue-300">{scanStatusMsg}</p>
-              <div className="w-56 h-2 bg-slate-800 rounded-full overflow-hidden">
-                <div className="h-full bg-gradient-to-r from-blue-500 via-indigo-500 to-emerald-500 animate-pulse w-full"></div>
-              </div>
-            </div>
-          )}
-        </div>
-        <canvas ref={canvasRef} className="hidden" />
-
-        {/* Quality indicator / Info */}
-        {scanResult && !errorMsg && (
-          <div className="bg-emerald-50 dark:bg-emerald-900/30 text-emerald-800 dark:text-emerald-300 p-2.5 rounded-xl text-xs flex justify-between items-center px-4 border border-emerald-200 dark:border-emerald-800">
-             <div className="flex items-center gap-2">
-               <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-               <span className="font-bold">{isAr ? "تم مسح المستند بنجاح وبدقة عالية" : "Document scanned successfully in high quality"}</span>
-             </div>
-             <span className="font-mono text-[10px] opacity-80">HP M282nw • {resolutionDpi} DPI • {colorMode}</span>
-          </div>
-        )}
-
-        {/* Error Notification */}
-        {errorMsg && (
-          <div className="p-3 bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 text-amber-900 dark:text-amber-300 rounded-xl text-xs flex items-start justify-between gap-2">
-            <div className="flex items-start gap-2">
-              <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
               <div>
-                <p className="font-bold mb-0.5">
-                  {isAr ? "تنبيه اتصال الماسح الضوئي" : "Scanner Connection Notice"}
-                </p>
-                <p>{errorMsg}</p>
+                <label className="block text-slate-600 dark:text-slate-400 font-bold mb-1">
+                  {isAr ? "مسار السحب" : "Paper Source"}
+                </label>
+                <select
+                  value={paperSource}
+                  onChange={(e) => {
+                    const src = e.target.value as any;
+                    setPaperSource(src);
+                    if (src === "feeder") setIsBatchMode(true);
+                  }}
+                  disabled={isScanning}
+                  className="w-full bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-lg p-1.5 font-medium dark:text-white"
+                >
+                  <option value="auto">{isAr ? "تلقائي (Auto)" : "Auto"}</option>
+                  <option value="feeder">{isAr ? "درج السحب (ADF)" : "ADF Feeder"}</option>
+                  <option value="flatbed">{isAr ? "السطح الزجاجي" : "Flatbed"}</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-slate-600 dark:text-slate-400 font-bold mb-1">
+                  {isAr ? "حجم المستند" : "Doc Size"}
+                </label>
+                <select
+                  value={paperSize}
+                  onChange={(e) => setPaperSize(e.target.value)}
+                  disabled={isScanning}
+                  className="w-full bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-lg p-1.5 font-medium dark:text-white"
+                >
+                  <option value="CHEQUE">{isAr ? "شيك بنكي (Cheque)" : "Cheque"}</option>
+                  <option value="A4">A4 (عقد/مستند)</option>
+                  <option value="ID">{isAr ? "بطاقة هوية (ID)" : "ID Card"}</option>
+                  <option value="AUTO">{isAr ? "تلقائي (Auto)" : "Auto"}</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-slate-600 dark:text-slate-400 font-bold mb-1">
+                  {isAr ? "دقة المسح" : "DPI"}
+                </label>
+                <select
+                  value={resolutionDpi}
+                  onChange={(e) => setResolutionDpi(Number(e.target.value))}
+                  disabled={isScanning}
+                  className="w-full bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-lg p-1.5 font-medium dark:text-white"
+                >
+                  <option value={200}>200 DPI (سريع)</option>
+                  <option value={300}>300 DPI (قياسي / مثالي)</option>
+                  <option value={600}>600 DPI (فائق الدقة)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-slate-600 dark:text-slate-400 font-bold mb-1">
+                  {isAr ? "نمط الألوان" : "Color"}
+                </label>
+                <select
+                  value={colorMode}
+                  onChange={(e) => setColorMode(e.target.value as any)}
+                  disabled={isScanning}
+                  className="w-full bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-lg p-1.5 font-medium dark:text-white"
+                >
+                  <option value="COLOR">{isAr ? "ألوان (Color)" : "Color"}</option>
+                  <option value="GRAYSCALE">{isAr ? "تدرج رمادي" : "Grayscale"}</option>
+                  <option value="MONO">{isAr ? "أبيض وأسود" : "B&W"}</option>
+                </select>
               </div>
             </div>
-            {!showBridgeHelp && (
-              <button
-                type="button"
-                onClick={() => setShowBridgeHelp(true)}
-                className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold shrink-0"
+          )}
+
+          {/* Live Framing & Scanning Viewport */}
+          <div
+            className={`relative w-full ${
+              isFullscreen ? "flex-1 min-h-[60vh]" : "h-[56vh] max-h-[460px] min-h-[280px]"
+            } bg-slate-950 rounded-2xl overflow-hidden border-2 border-slate-800 flex items-center justify-center transition-all shadow-inner`}
+          >
+            {/* Controls Overlay */}
+            {scanResult && (
+              <div className="absolute top-4 right-4 flex gap-2 z-30">
+                <button
+                  onClick={() => setRotation((r) => r - 90)}
+                  className="bg-black/60 p-2 rounded-lg text-white hover:bg-black/80 backdrop-blur"
+                  title={isAr ? "تدوير يسار" : "Rotate Left"}
+                >
+                  <RotateCw className="w-5 h-5 -scale-x-100" />
+                </button>
+                <button
+                  onClick={() => setRotation((r) => r + 90)}
+                  className="bg-black/60 p-2 rounded-lg text-white hover:bg-black/80 backdrop-blur"
+                  title={isAr ? "تدوير يمين" : "Rotate Right"}
+                >
+                  <RotateCw className="w-5 h-5" />
+                </button>
+                {!isFullscreen && (
+                  <button
+                    onClick={() => setIsFullscreen(true)}
+                    className="bg-black/60 p-2 rounded-lg text-white hover:bg-black/80 backdrop-blur"
+                    title={isAr ? "ملء الشاشة" : "Fullscreen"}
+                  >
+                    <Maximize2 className="w-5 h-5" />
+                  </button>
+                )}
+              </div>
+            )}
+
+            {!scanResult ? (
+              cameraActive ? (
+                <video
+                  ref={videoRef}
+                  playsInline
+                  muted
+                  className="w-full h-full object-cover opacity-60"
+                />
+              ) : (
+                <div className="text-center p-6 text-slate-400 space-y-3">
+                  <Printer className="w-14 h-14 mx-auto text-blue-500 animate-pulse" />
+                  <div className="space-y-1">
+                    <p className="text-sm font-bold text-slate-200">
+                      {isAr
+                        ? "الماسح الضوئي HP Color LaserJet Pro جاهز للاستخدام"
+                        : "HP Color LaserJet Pro MFP Scanner Ready"}
+                    </p>
+                    <p className="text-xs text-slate-400 max-w-sm mx-auto">
+                      {isAr
+                        ? "ضع الشيك أو المستند في درج السحب العلوي (ADF) أو على الزجاج واضغط على [بدء المسح المباشر]."
+                        : "Place document in feeder or glass and click [Start Direct Scan]."}
+                    </p>
+                  </div>
+                </div>
+              )
+            ) : (
+              <img
+                src={
+                  batchPages.length > 0
+                    ? batchPages[selectedBatchPageIndex]?.imageBase64 || scanResult.imageBase64
+                    : scanResult.imageBase64
+                }
+                alt="Scanned Document"
+                className="w-full h-full object-contain transition-transform duration-300"
+                style={{ transform: `rotate(${rotation}deg)` }}
+              />
+            )}
+
+            {/* Dynamic Framing Guide Box based on Paper Size */}
+            {!scanResult && !isScanning && (
+              <div
+                className={`absolute ${
+                  paperSize === "A4"
+                    ? "inset-y-4 inset-x-12"
+                    : paperSize === "ID"
+                    ? "inset-y-24 inset-x-20"
+                    : "inset-y-16 inset-x-8"
+                } border-2 border-dashed border-blue-400/70 rounded-xl pointer-events-none flex flex-col justify-between p-3 transition-all duration-500`}
               >
-                {isAr ? "طريقة الحل" : "Troubleshoot"}
-              </button>
+                <div className="flex justify-between items-center text-[10px] text-blue-300 font-mono bg-slate-950/70 px-2 py-0.5 rounded backdrop-blur">
+                  <span>HP M282nw • {paperSize} BOUNDARY</span>
+                  <span>
+                    {resolutionDpi} DPI • {paperSource.toUpperCase()}
+                  </span>
+                </div>
+                <div className="text-center text-[11px] text-blue-200 font-bold bg-slate-950/70 px-3 py-1 rounded backdrop-blur self-center">
+                  {isAr ? "منطقة المسح الضوئي المباشر" : "Direct Hardware Scan Framing"}
+                </div>
+                <div className="text-right text-[10px] text-blue-300 font-mono bg-slate-950/70 px-2 py-0.5 rounded backdrop-blur self-end">
+                  HP LASERJET ENGINE
+                </div>
+              </div>
+            )}
+
+            {/* Scanning Overlay State */}
+            {isScanning && (
+              <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-sm flex flex-col items-center justify-center text-white z-20 space-y-4">
+                <div className="relative">
+                  <Printer className="w-12 h-12 text-blue-400 animate-bounce" />
+                  <RefreshCw className="w-6 h-6 text-emerald-400 animate-spin absolute -bottom-1 -right-1" />
+                </div>
+                <p className="font-bold text-sm text-blue-300">{scanStatusMsg}</p>
+                <div className="w-56 h-2 bg-slate-800 rounded-full overflow-hidden">
+                  <div className="h-full bg-gradient-to-r from-blue-500 via-indigo-500 to-emerald-500 animate-pulse w-full"></div>
+                </div>
+              </div>
             )}
           </div>
-        )}
+          <canvas ref={canvasRef} className="hidden" />
 
-        {/* Action Controls */}
-        <div className="flex items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-800">
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={onClose}
-              disabled={isScanning}
-              className="px-4 py-2.5 border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl text-xs font-bold transition-all"
-            >
-              {isAr ? "إلغاء" : "Cancel"}
-            </button>
-            
-            <button
-              type="button"
-              onClick={() => setShowBridgeHelp(!showBridgeHelp)}
-              className="px-3 py-2.5 text-slate-600 dark:text-slate-400 hover:text-blue-600 text-xs font-bold flex items-center gap-1.5 transition-all"
-            >
-              <HelpCircle className="w-4 h-4" />
-              <span>{isAr ? "أداة HP Bridge" : "HP Bridge Tool"}</span>
-            </button>
-          </div>
-          
-          <div className="flex gap-2">
-             {!scanResult ? (
+          {/* Multi-page ADF Batch Carousel / Selector */}
+          {batchPages.length > 1 && (
+            <div className="p-3 bg-slate-50 dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Layers className="w-4 h-4 text-indigo-600" />
+                <span className="text-xs font-bold text-slate-800 dark:text-white">
+                  {isAr
+                    ? `دفعة مسح ADF: تم سحب ${batchPages.length} صفحات / شيكات`
+                    : `ADF Batch: ${batchPages.length} pages scanned`}
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={selectedBatchPageIndex === 0}
+                  onClick={() => setSelectedBatchPageIndex((p) => Math.max(0, p - 1))}
+                  className="p-1 rounded bg-white dark:bg-slate-700 border border-slate-300 disabled:opacity-30"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+                <span className="text-xs font-mono font-bold text-slate-700 dark:text-slate-300">
+                  {selectedBatchPageIndex + 1} / {batchPages.length}
+                </span>
+                <button
+                  type="button"
+                  disabled={selectedBatchPageIndex === batchPages.length - 1}
+                  onClick={() => setSelectedBatchPageIndex((p) => Math.min(batchPages.length - 1, p + 1))}
+                  className="p-1 rounded bg-white dark:bg-slate-700 border border-slate-300 disabled:opacity-30"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Quality indicator / Info */}
+          {scanResult && !errorMsg && (
+            <div className="bg-emerald-50 dark:bg-emerald-900/30 text-emerald-800 dark:text-emerald-300 p-2.5 rounded-xl text-xs flex justify-between items-center px-4 border border-emerald-200 dark:border-emerald-800">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                <span className="font-bold">
+                  {isAr
+                    ? `تم مسح المستند بنجاح بدقة عالية (${batchPages.length > 0 ? `${batchPages.length} صفحات` : "صفحة واحدة"})`
+                    : `Document scanned successfully in high quality (${batchPages.length > 0 ? `${batchPages.length} pages` : "1 page"})`}
+                </span>
+              </div>
+              <span className="font-mono text-[10px] opacity-80">
+                HP M282nw • {resolutionDpi} DPI • {colorMode}
+              </span>
+            </div>
+          )}
+
+          {/* Error Notification */}
+          {errorMsg && (
+            <div className="p-3 bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 text-amber-900 dark:text-amber-300 rounded-xl text-xs flex items-start justify-between gap-2">
+              <div className="flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-bold mb-0.5">
+                    {isAr ? "تنبيه اتصال الماسح الضوئي" : "Scanner Connection Notice"}
+                  </p>
+                  <p>{errorMsg}</p>
+                </div>
+              </div>
+              {!showBridgeHelp && (
+                <button
+                  type="button"
+                  onClick={() => setShowBridgeHelp(true)}
+                  className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold shrink-0"
+                >
+                  {isAr ? "طريقة الحل" : "Troubleshoot"}
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Action Controls */}
+          <div className="flex items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-800">
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={isScanning}
+                className="px-4 py-2.5 border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl text-xs font-bold transition-all"
+              >
+                {isAr ? "إلغاء" : "Cancel"}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowBridgeHelp(!showBridgeHelp)}
+                className="px-3 py-2.5 text-slate-600 dark:text-slate-400 hover:text-blue-600 text-xs font-bold flex items-center gap-1.5 transition-all"
+              >
+                <HelpCircle className="w-4 h-4" />
+                <span>{isAr ? "أداة HP Bridge" : "HP Bridge Tool"}</span>
+              </button>
+            </div>
+
+            <div className="flex gap-2">
+              {!scanResult ? (
                 <div className="flex gap-2">
-                  <input 
-                    type="file" 
-                    accept="image/*,application/pdf" 
-                    className="hidden" 
+                  <input
+                    type="file"
+                    accept="image/*,application/pdf"
+                    className="hidden"
                     id="scanner-upload-fallback"
                     onChange={(e) => {
                       const file = e.target.files?.[0];
                       if (file) {
                         const reader = new FileReader();
                         reader.onload = (event) => {
-                          setScanResult({ 
-                            imageBase64: event.target?.result as string, 
-                            mimeType: file.type 
+                          setScanResult({
+                            imageBase64: event.target?.result as string,
+                            mimeType: file.type,
                           });
                           setErrorMsg(null);
                         };
@@ -692,12 +839,20 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
                     ) : (
                       <>
                         <Printer className="w-4 h-4" />
-                        <span>{isAr ? "بدء المسح المباشر من HP" : "Start Direct HP Scan"}</span>
+                        <span>
+                          {isBatchMode || paperSource === "feeder"
+                            ? isAr
+                              ? "بدء سحب الدفعة (ADF Batch)"
+                              : "Start ADF Batch Scan"
+                            : isAr
+                            ? "بدء المسح المباشر من HP"
+                            : "Start Direct HP Scan"}
+                        </span>
                       </>
                     )}
                   </button>
                 </div>
-             ) : (
+              ) : (
                 <>
                   <button
                     type="button"
@@ -713,16 +868,33 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
                     className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-2 shadow-lg shadow-emerald-600/20 transition-all"
                   >
                     <Check className="w-4 h-4" />
-                    <span>{isAr ? "اعتماد المستند الممسوح" : "Confirm Document"}</span>
+                    <span>
+                      {batchPages.length > 1
+                        ? isAr
+                          ? `اعتماد دفعة الشيكات (${batchPages.length})`
+                          : `Confirm Batch (${batchPages.length})`
+                        : isAr
+                        ? "اعتماد المستند الممسوح"
+                        : "Confirm Document"}
+                    </span>
                   </button>
                 </>
-             )}
+              )}
+            </div>
           </div>
         </div>
-      </div>
-    </Modal>
+      </Modal>
+
+      {/* Embedded Scanner Diagnostics Modal */}
+      <ScannerDiagnosticsModal
+        isOpen={showDiagnosticsModal}
+        onClose={() => {
+          setShowDiagnosticsModal(false);
+          loadDevices();
+        }}
+      />
+    </>
   );
 };
 
 export const DocumentScannerModal = ScannerModal;
-

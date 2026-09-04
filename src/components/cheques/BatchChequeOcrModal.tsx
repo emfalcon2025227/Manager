@@ -422,7 +422,7 @@ export const BatchChequeOcrModal: React.FC<BatchChequeOcrModalProps> = ({
     }
   };
 
-  // Handle Hardware Scanner Capture
+  // Handle Hardware Scanner Capture (Single Page)
   const handleHardwareScanComplete = async (imageBase64: string, mimeType: string) => {
     setIsHardwareScannerOpen(false);
     setIsProcessingOcr(true);
@@ -451,6 +451,47 @@ export const BatchChequeOcrModal: React.FC<BatchChequeOcrModalProps> = ({
     } catch (err: any) {
       console.error("Hardware scan OCR error:", err);
       alert(isAr ? `فشل المسح: ${err.message || ""}` : `Scan failed: ${err.message || ""}`);
+    } finally {
+      setIsProcessingOcr(false);
+      setOcrProgressText("");
+    }
+  };
+
+  // Handle Hardware Scanner ADF Multi-Page Batch Capture
+  const handleHardwareBatchScanComplete = async (pages: { imageBase64: string; mimeType: string }[]) => {
+    setIsHardwareScannerOpen(false);
+    if (!pages || pages.length === 0) return;
+
+    setIsProcessingOcr(true);
+    setOcrProgressText(
+      isAr
+        ? `جاري معالجة ${pages.length} شيكات مسحوبة من وحدة التغذية (ADF) بالذكاء الاصطناعي...`
+        : `Processing ${pages.length} cheques scanned from ADF with AI OCR...`
+    );
+
+    try {
+      const inputs: DocumentProcessingInput[] = pages.map((p, idx) => ({
+        sourceType: "HARDWARE_SCANNER",
+        fileName: `feeder-scan-${Date.now()}-page-${idx + 1}.jpg`,
+        mimeType: p.mimeType || "image/jpeg",
+        imageBase64: p.imageBase64,
+        originalSourceDataUrl: p.imageBase64,
+      }));
+
+      const batchRes = await DocumentSessionService.processBatch(
+        inputs,
+        currentSession || undefined,
+        cheques,
+        availableInstallments.slice(stagedCheques.length),
+        (msg: string) => setOcrProgressText(msg)
+      );
+
+      if (batchRes.items.length > 0) {
+        stageProcessedItems(batchRes.items, pages.length, stagedCheques.length > 0);
+      }
+    } catch (err: any) {
+      console.error("Hardware batch scan OCR error:", err);
+      alert(isAr ? `فشل مسح الدفعة: ${err.message || ""}` : `Batch scan failed: ${err.message || ""}`);
     } finally {
       setIsProcessingOcr(false);
       setOcrProgressText("");
@@ -1249,6 +1290,7 @@ export const BatchChequeOcrModal: React.FC<BatchChequeOcrModalProps> = ({
         isOpen={isHardwareScannerOpen}
         onClose={() => setIsHardwareScannerOpen(false)}
         onScanComplete={handleHardwareScanComplete}
+        onBatchScanComplete={handleHardwareBatchScanComplete}
         documentType="BATCH_CHEQUES"
       />
     </>
