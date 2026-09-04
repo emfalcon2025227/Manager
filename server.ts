@@ -1047,6 +1047,26 @@ function normalizeOcrExtractedData(data: any, documentType: string) {
     if (res.contractEndDate) res.contractEndDate = normalizeDateToIso(res.contractEndDate);
     if (res.totalRent != null) res.totalRent = Number(res.totalRent);
     if (res.installmentsCount != null) res.installmentsCount = Number(res.installmentsCount);
+  } else if (documentType === "MULTI_CHEQUE" || documentType === "CHEQUE_BATCH") {
+    if (Array.isArray(res.cheques)) {
+      res.cheques = res.cheques.map((c: any) => {
+        if (!c || typeof c !== "object") return c;
+        const normC = { ...c };
+        if (normC.chequeDate) normC.chequeDate = normalizeDateToIso(normC.chequeDate);
+        if (normC.dueDate) normC.dueDate = normalizeDateToIso(normC.dueDate);
+        if (normC.chequeNumber) {
+          const cleanNum = String(normC.chequeNumber).replace(/\D/g, "");
+          if (cleanNum.length >= 6) {
+            normC.chequeNumber = cleanNum;
+          }
+        }
+        if (normC.amountNumeric != null && normC.amount == null) normC.amount = Number(normC.amountNumeric);
+        if (normC.amount != null && normC.amountNumeric == null) normC.amountNumeric = Number(normC.amount);
+        if (normC.payee && !normC.payeeName) normC.payeeName = normC.payee;
+        if (normC.payeeName && !normC.payee) normC.payee = normC.payeeName;
+        return normC;
+      });
+    }
   }
 
   return res;

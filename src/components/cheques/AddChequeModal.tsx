@@ -564,6 +564,12 @@ export const AddChequeModal: React.FC<AddChequeModalProps> = ({
         originalStatus: "NORMAL",
         collectionStatus: "NOT_COLLECTED",
         notes: `Batch OCR Scanned Cheque (#${chq.chequeNumber})`,
+        sourcePdfId: chq.sourcePdfId,
+        sourcePdfFileName: chq.sourcePdfFileName,
+        sourcePdfPageNumber: chq.pageNumber,
+        sourceCroppedRegion: chq.croppedRegion,
+        ingestionSessionId: chq.sessionId,
+        sourceDocumentId: chq.sourcePdfId,
       });
     }
 

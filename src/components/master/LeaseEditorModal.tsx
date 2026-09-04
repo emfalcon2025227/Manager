@@ -77,6 +77,11 @@ interface LeaseInstallmentFormRow {
   drawerName?: string;
   chequeImage?: string;
   status: "ACTIVE" | "PAID";
+  sourcePdfId?: string;
+  sourcePdfFileName?: string;
+  sourcePdfPageNumber?: number;
+  sourceCroppedRegion?: { x: number; y: number; width: number; height: number };
+  ingestionSessionId?: string;
 }
 
 interface OcrWarningState {
@@ -1115,7 +1120,13 @@ export const LeaseEditorModal: React.FC<LeaseEditorModalProps> = ({
           originalStatus: "NORMAL",
           collectionStatus: "NOT_COLLECTED",
           drawerName: inst.drawerName || undefined,
-          imageUrl: inst.chequeImage
+          imageUrl: inst.chequeImage,
+          sourcePdfId: inst.sourcePdfId,
+          sourcePdfFileName: inst.sourcePdfFileName,
+          sourcePdfPageNumber: inst.sourcePdfPageNumber,
+          sourceCroppedRegion: inst.sourceCroppedRegion,
+          ingestionSessionId: inst.ingestionSessionId,
+          sourceDocumentId: inst.sourcePdfId,
         });
       }
     });
@@ -3492,6 +3503,11 @@ export const LeaseEditorModal: React.FC<LeaseEditorModalProps> = ({
                   dueDate: staged.dueDate,
                   drawerName: staged.drawerName,
                   chequeImage: staged.imagePreview,
+                  sourcePdfId: staged.sourcePdfId,
+                  sourcePdfFileName: staged.sourcePdfFileName,
+                  sourcePdfPageNumber: staged.pageNumber,
+                  sourceCroppedRegion: staged.croppedRegion,
+                  ingestionSessionId: staged.sessionId,
                 };
               }
             }

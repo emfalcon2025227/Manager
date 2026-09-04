@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef } from "react";
+import React, { useState, useMemo, useRef, useEffect } from "react";
 import {
   Sparkles,
   Upload,
@@ -22,6 +22,8 @@ import {
   HelpCircle,
   Lock,
   Scan,
+  FileText,
+  RotateCcw,
 } from "lucide-react";
 import { Modal } from "../common/Modal";
 import { useLanguage } from "../../context/LanguageContext";
@@ -29,13 +31,21 @@ import { useAuth } from "../../context/AuthContext";
 import { useData } from "../../context/DataContext";
 import { normalizeChequeOCR, NormalizedChequeOCRResult } from "../../utils/ocrChequeMapper";
 import { getAllUaeBanks } from "../../utils/bankUtils";
-import { SearchableSelect } from "../common/SearchableSelect";
 import { Cheque, ChequeStatus } from "../../types";
 import { DocumentStorageService } from "../../services/documentStorageService";
 import { ScannerModal } from "./ScannerModal";
+import {
+  DocumentSessionService,
+  DocumentProcessingSession,
+  ProcessedDocumentItem,
+  DocumentProcessingInput,
+  validateChequeItem,
+} from "../../services/ocr/documentSessionService";
+import { PdfIngestionService } from "../../services/pdfIngestionService";
 
 export interface StagedBatchCheque {
   id: string;
+  temporaryId: string;
   installmentId?: string;
   installmentIndex?: number;
   chequeNumber: string;
@@ -49,11 +59,23 @@ export interface StagedBatchCheque {
   accountNumber?: string;
   confidence: number;
   imagePreview?: string;
+  originalImage?: string;
   isManuallyEdited?: boolean;
+  manualCorrections?: Partial<NormalizedChequeOCRResult>;
+  originalOcrAmount?: number;
+  originalOcrChequeNumber?: string;
+  originalOcrDueDate?: string;
+  originalOcrBankName?: string;
   status: ChequeStatus;
   validationStatus: "VALID" | "AMOUNT_MISMATCH" | "DATE_MISMATCH" | "DUPLICATE" | "MISSING_INFO" | "NEEDS_REVIEW";
   validationNotes?: string;
   duplicateLevel?: "EXACT" | "PROBABLE" | "POSSIBLE" | "NONE";
+  sourcePdfId?: string;
+  sourcePdfFileName?: string;
+  pageNumber?: number;
+  croppedRegion?: { x: number; y: number; width: number; height: number };
+  isPdfSource?: boolean;
+  sessionId?: string;
 }
 
 export interface BatchInstallmentTarget {
@@ -71,7 +93,6 @@ export interface BatchInstallmentTarget {
 interface BatchChequeOcrModalProps {
   isOpen: boolean;
   onClose: () => void;
-  // Optional link to existing lease/contract installments
   leaseId?: string;
   tenantId?: string;
   propertyId?: string;
@@ -97,13 +118,9 @@ export const BatchChequeOcrModal: React.FC<BatchChequeOcrModalProps> = ({
   const { language } = useLanguage();
   const { currentUser } = useAuth();
   const isAr = language === "ar";
-  const {
-    extractChequeBatchOCR,
-    extractChequeOCR,
-    checkDuplicateCheque,
-    cheques = [],
-  } = useData();
+  const { cheques = [] } = useData();
 
+  const [currentSession, setCurrentSession] = useState<DocumentProcessingSession | null>(null);
   const [isProcessingOcr, setIsProcessingOcr] = useState(false);
   const [ocrProgressText, setOcrProgressText] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -133,310 +150,257 @@ export const BatchChequeOcrModal: React.FC<BatchChequeOcrModalProps> = ({
     });
   }, [targetInstallments]);
 
-  // Validation Evaluator for Staged Cheques with 3-tier duplicate detection
-  const validateCheque = (
-    chq: StagedBatchCheque,
-    allInBatch: StagedBatchCheque[]
-  ): { status: StagedBatchCheque["validationStatus"]; notes?: string; duplicateLevel?: StagedBatchCheque["duplicateLevel"] } => {
-    // 1. Missing Cheque Number
-    if (!chq.chequeNumber || chq.chequeNumber.trim() === "") {
-      return {
-        status: "MISSING_INFO",
-        notes: isAr ? "رقم الشيك مفقود أو غير واضح" : "Cheque number missing or unclear",
-        duplicateLevel: "NONE",
-      };
-    }
+  // Clean lifecycle reset on modal Open and Close (Prevents stale state and input caching)
+  useEffect(() => {
+    if (isOpen) {
+      // 1. Reset file inputs
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      if (singleFileInputRef.current) singleFileInputRef.current.value = "";
 
-    if (chq.amount <= 0) {
-      return {
-        status: "NEEDS_REVIEW",
-        notes: isAr ? "مبلغ الشيك مفقود أو غير مقروء" : "Cheque amount is missing or unreadable",
-        duplicateLevel: "NONE",
-      };
-    }
-
-    // 2. Duplicate Check against existing system
-    const trimmedNum = chq.chequeNumber.trim();
-    const existingExact = cheques.find(
-      (c) => c.chequeNumber === trimmedNum && (c.drawerName === chq.drawerName || c.bankName === chq.bankName)
-    );
-    const existingNumOnly = cheques.find((c) => c.chequeNumber === trimmedNum);
-
-    if (existingExact) {
-      return {
-        status: "DUPLICATE",
-        notes: isAr
-          ? `الشيك مسجل مسبقاً بالنظام مطابقة تامة (#${chq.chequeNumber})`
-          : `Cheque #${chq.chequeNumber} exact duplicate in system`,
-        duplicateLevel: "EXACT",
-      };
-    } else if (existingNumOnly) {
-      return {
-        status: "DUPLICATE",
-        notes: isAr
-          ? `رقم الشيك مسجل مسبقاً لدى بنك/ساحب آخر (#${chq.chequeNumber})`
-          : `Cheque #${chq.chequeNumber} number exists with different bank/drawer`,
-        duplicateLevel: "PROBABLE",
-      };
-    }
-
-    // 3. Duplicate within same batch
-    const duplicatesInBatch = allInBatch.filter(
-      (item) => item.id !== chq.id && item.chequeNumber && item.chequeNumber.trim() === trimmedNum
-    );
-    if (duplicatesInBatch.length > 0) {
-      return {
-        status: "DUPLICATE",
-        notes: isAr
-          ? "رقم الشيك مكرر داخل نفس المجموعة الممسوحة"
-          : "Duplicate cheque number within this batch",
-        duplicateLevel: "EXACT",
-      };
-    }
-
-    // 4. Amount Mismatch with assigned installment
-    if (
-      chq.originalInstallmentAmount !== undefined &&
-      chq.originalInstallmentAmount > 0 &&
-      chq.amount > 0 &&
-      Math.abs(chq.amount - chq.originalInstallmentAmount) > 0.01
-    ) {
-      return {
-        status: "AMOUNT_MISMATCH",
-        notes: isAr
-          ? `المبلغ المقروء (${chq.amount.toLocaleString()}) يختلف عن مبلغ القسط (${chq.originalInstallmentAmount.toLocaleString()})`
-          : `Scanned amount (${chq.amount.toLocaleString()}) differs from installment (${chq.originalInstallmentAmount.toLocaleString()})`,
-        duplicateLevel: "NONE",
-      };
-    }
-
-    // 5. Date Mismatch with assigned installment
-    if (
-      chq.originalInstallmentDueDate &&
-      chq.dueDate &&
-      chq.originalInstallmentDueDate !== chq.dueDate
-    ) {
-      return {
-        status: "DATE_MISMATCH",
-        notes: isAr
-          ? `تاريخ الشيك (${chq.dueDate}) يختلف عن موعد القسط (${chq.originalInstallmentDueDate})`
-          : `Cheque date (${chq.dueDate}) differs from installment date (${chq.originalInstallmentDueDate})`,
-        duplicateLevel: "NONE",
-      };
-    }
-
-    // 6. Missing Date or Bank
-    if (!chq.dueDate || !chq.bankName) {
-      return {
-        status: "NEEDS_REVIEW",
-        notes: isAr ? "يحتاج لمراجعة البيانات الناقصة" : "Needs review for missing fields",
-        duplicateLevel: "NONE",
-      };
-    }
-
-    return { status: "VALID", duplicateLevel: "NONE" };
-  };
-
-  // Process Raw OCR results and assign to installments
-  const processAndStageExtractedCheques = (extractedItems: any[], sourceImageCount: number) => {
-    // 1. Normalize each item
-    const normalizedList: Array<NormalizedChequeOCRResult & { confidence: number; imagePreview?: string }> =
-      extractedItems.map((item) => {
-        const norm = normalizeChequeOCR(item, isAr ? "ar" : "en");
-        return {
-          ...norm,
-          drawerName: norm.drawerName || defaultDrawerName || "",
-          confidence: Number(item.confidence) || 0.85,
-          imagePreview: item.imagePreview,
-        };
+      // 2. Initialize fresh authoritative session
+      const newSession = DocumentSessionService.createSession({
+        sourceType: "FILE_UPLOAD",
+        contractId: leaseId,
+        createdBy: currentUser?.nameAr || currentUser?.username || "المسؤول",
       });
+      setCurrentSession(newSession);
 
-    // 2. Sort chronologically by dueDate / chequeDate ASC (unclear dates go to end)
-    const sorted = [...normalizedList].sort((a, b) => {
-      if (!a.dueDate) return 1;
-      if (!b.dueDate) return -1;
-      return new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime();
-    });
-
-    const staged: StagedBatchCheque[] = [];
-    const surplus: StagedBatchCheque[] = [];
-
-    // 3. Assign sequentially to available installments without overwriting
-    const targetSlots = availableInstallments.length > 0 ? availableInstallments : [];
-
-    sorted.forEach((item, idx) => {
-      const targetSlot = targetSlots[idx];
-      const chqId = `batch-staged-${Date.now()}-${idx}-${Math.random().toString(36).substr(2, 5)}`;
-      const stagedItem: StagedBatchCheque = {
-        id: chqId,
-        installmentId: targetSlot?.id,
-        installmentIndex: targetSlot ? targetSlot.installmentNumber : idx + 1,
-        chequeNumber: item.chequeNumber || "",
-        bankName: item.bankName || "",
-        amount: item.amount > 0 ? item.amount : (targetSlot?.amount || 0),
-        originalInstallmentAmount: targetSlot?.amount,
-        chequeDate: item.dueDate || targetSlot?.dueDate || "",
-        originalInstallmentDueDate: targetSlot?.dueDate,
-        dueDate: item.dueDate || targetSlot?.dueDate || "",
-        drawerName: item.drawerName || defaultDrawerName || "",
-        accountNumber: item.accountNumber || "",
-        confidence: item.confidence,
-        imagePreview: item.imagePreview,
-        status: "POST_DATED",
-        validationStatus: "VALID",
-        duplicateLevel: "NONE",
-      };
-
-      if (targetSlot || targetSlots.length === 0) {
-        staged.push(stagedItem);
-      } else {
-        surplus.push(stagedItem);
-      }
-    });
-
-    // 4. Run validation on all
-    const validatedStaged = staged.map((chq) => {
-      const v = validateCheque(chq, staged);
-      return { ...chq, validationStatus: v.status, validationNotes: v.notes, duplicateLevel: v.duplicateLevel };
-    });
-
-    const validatedSurplus = surplus.map((chq) => {
-      const v = validateCheque(chq, [...staged, ...surplus]);
-      return { ...chq, validationStatus: v.status, validationNotes: v.notes, duplicateLevel: v.duplicateLevel };
-    });
-
-    setStagedCheques(validatedStaged);
-    setUnassignedCheques(validatedSurplus);
-    setUploadedFilesCount(sourceImageCount);
-  };
-
-  // Process a single or multi-cheque image payload safely
-  const processImagePayload = async (base64: string, mimeType: string = "image/jpeg"): Promise<any[]> => {
-    try {
-      // 1. Try batch OCR first in case the image contains multiple cheques on one sheet
-      const batchRes = await extractChequeBatchOCR({ imageBase64: base64, mimeType });
-      if (batchRes && batchRes.success && batchRes.data && Array.isArray(batchRes.data.cheques) && batchRes.data.cheques.length > 0) {
-        return batchRes.data.cheques.map((c: any) => ({
-          ...c,
-          imagePreview: base64,
-        }));
-      }
-
-      // 2. Fallback to single cheque extraction
-      const singleRes = await extractChequeOCR(base64, mimeType);
-      if (singleRes) {
-        const data = singleRes.data || singleRes.extracted || singleRes;
-        return [{
-          ...data,
-          imagePreview: base64,
-        }];
-      }
-    } catch (err) {
-      console.warn("[BatchChequeOcr] Extraction fallback:", err);
-    }
-    return [];
-  };
-
-  // Handle Hardware Scanner Capture
-  const handleHardwareScanComplete = async (imageBase64: string, mimeType: string) => {
-    setIsHardwareScannerOpen(false);
-    setIsProcessingOcr(true);
-    setOcrProgressText(isAr ? "جاري قراءة صورة الماسح الضوئي بالذكاء الاصطناعي..." : "Processing hardware scan with AI OCR...");
-
-    try {
-      const results = await processImagePayload(imageBase64, mimeType);
-      if (results.length > 0) {
-        if (stagedCheques.length > 0) {
-          // Append new cheques
-          const newNormalized = results.map((item) => {
-            const norm = normalizeChequeOCR(item, isAr ? "ar" : "en");
-            return {
-              ...norm,
-              drawerName: norm.drawerName || defaultDrawerName || "",
-              confidence: Number(item.confidence) || 0.85,
-              imagePreview: imageBase64,
-            };
-          });
-
-          const newStaged = newNormalized.map((item, idx) => {
-            const currentCount = stagedCheques.length + idx;
-            const targetSlot = availableInstallments[currentCount];
-            const chqId = `scan-staged-${Date.now()}-${idx}`;
-            const stagedItem: StagedBatchCheque = {
-              id: chqId,
-              installmentId: targetSlot?.id,
-              installmentIndex: targetSlot ? targetSlot.installmentNumber : currentCount + 1,
-              chequeNumber: item.chequeNumber || "",
-              bankName: item.bankName || "",
-              amount: item.amount > 0 ? item.amount : (targetSlot?.amount || 0),
-              originalInstallmentAmount: targetSlot?.amount,
-              chequeDate: item.dueDate || targetSlot?.dueDate || "",
-              originalInstallmentDueDate: targetSlot?.dueDate,
-              dueDate: item.dueDate || targetSlot?.dueDate || "",
-              drawerName: item.drawerName || defaultDrawerName || "",
-              accountNumber: item.accountNumber || "",
-              confidence: item.confidence,
-              imagePreview: imageBase64,
-              status: "POST_DATED",
-              validationStatus: "VALID",
-              duplicateLevel: "NONE",
-            };
-            const v = validateCheque(stagedItem, [...stagedCheques, stagedItem]);
-            return { ...stagedItem, validationStatus: v.status, validationNotes: v.notes, duplicateLevel: v.duplicateLevel };
-          });
-
-          setStagedCheques((prev) => [...prev, ...newStaged]);
-        } else {
-          processAndStageExtractedCheques(results, 1);
-        }
-      } else {
-        alert(isAr ? "تعذر قراءة بيانات الشيك من الماسح الضوئي." : "Could not read cheque from scanner.");
-      }
-    } catch (err: any) {
-      console.error("Hardware scan OCR error:", err);
-      alert(isAr ? `فشل المسح: ${err.message || ""}` : `Scan failed: ${err.message || ""}`);
-    } finally {
+      // 3. Clear transient staging states
+      setStagedCheques([]);
+      setUnassignedCheques([]);
+      setUploadedFilesCount(0);
+      setPreviewImage(null);
+      setSingleScanTargetId(null);
+      setIsProcessingOcr(false);
+      setOcrProgressText("");
+    } else {
+      // Clean up on modal close
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      if (singleFileInputRef.current) singleFileInputRef.current.value = "";
       setIsProcessingOcr(false);
       setOcrProgressText("");
     }
+  }, [isOpen, leaseId, currentUser]);
+
+  // Transform ProcessedDocumentItem array into StagedBatchCheque items mapped to installments
+  const stageProcessedItems = (
+    processedItems: ProcessedDocumentItem[],
+    sourceFileCount: number,
+    append: boolean = false
+  ) => {
+    // 1. Sort chronologically by dueDate ASC
+    const sorted = [...processedItems].sort((a, b) => {
+      const dateA = a.normalizedData.dueDate || "";
+      const dateB = b.normalizedData.dueDate || "";
+      if (!dateA) return 1;
+      if (!dateB) return -1;
+      return new Date(dateA).getTime() - new Date(dateB).getTime();
+    });
+
+    const targetSlots = availableInstallments.length > 0 ? availableInstallments : [];
+    const newStaged: StagedBatchCheque[] = [];
+    const newSurplus: StagedBatchCheque[] = [];
+
+    sorted.forEach((item, idx) => {
+      const effectiveIndex = append ? stagedCheques.length + idx : idx;
+      const targetSlot = targetSlots[effectiveIndex];
+      const chqId = item.temporaryId;
+
+      const stagedItem: StagedBatchCheque = {
+        id: chqId,
+        temporaryId: item.temporaryId,
+        installmentId: targetSlot?.id,
+        installmentIndex: targetSlot ? targetSlot.installmentNumber : effectiveIndex + 1,
+        chequeNumber: item.normalizedData.chequeNumber || "",
+        bankName: item.normalizedData.bankName || "",
+        amount:
+          item.normalizedData.amount > 0
+            ? item.normalizedData.amount
+            : (targetSlot?.amount || 0),
+        originalInstallmentAmount: targetSlot?.amount,
+        chequeDate: item.normalizedData.dueDate || targetSlot?.dueDate || "",
+        originalInstallmentDueDate: targetSlot?.dueDate,
+        dueDate: item.normalizedData.dueDate || targetSlot?.dueDate || "",
+        drawerName: item.normalizedData.drawerName || defaultDrawerName || "",
+        accountNumber: item.normalizedData.accountNumber || "",
+        confidence: item.confidence,
+        imagePreview: item.imagePreview,
+        originalImage: item.originalImage,
+        isManuallyEdited: item.isManuallyEdited,
+        manualCorrections: item.manualCorrections,
+        originalOcrAmount: item.originalOcrData?.amount,
+        originalOcrChequeNumber: item.originalOcrData?.chequeNumber,
+        originalOcrDueDate: item.originalOcrData?.dueDate,
+        originalOcrBankName: item.originalOcrData?.bankName,
+        status: "POST_DATED",
+        validationStatus: item.validationStatus,
+        validationNotes: item.validationNotes,
+        duplicateLevel: item.duplicateLevel,
+        sourcePdfId: item.sourcePdfId,
+        sourcePdfFileName: item.sourceFileName,
+        pageNumber: item.pageNumber,
+        croppedRegion: item.croppedRegion,
+        isPdfSource: Boolean(item.sourcePdfId),
+        sessionId: currentSession?.sessionId,
+      };
+
+      if (targetSlot || targetSlots.length === 0) {
+        newStaged.push(stagedItem);
+      } else {
+        newSurplus.push(stagedItem);
+      }
+    });
+
+    if (append) {
+      setStagedCheques((prev) => [...prev, ...newStaged]);
+      setUnassignedCheques((prev) => [...prev, ...newSurplus]);
+    } else {
+      setStagedCheques(newStaged);
+      setUnassignedCheques(newSurplus);
+    }
+    setUploadedFilesCount((prev) => (append ? prev + sourceFileCount : sourceFileCount));
   };
 
-  // Handle Multi-file or Multi-cheque Upload
+  // Re-run validation on a cheque item
+  const revalidateCheque = (
+    chq: StagedBatchCheque,
+    allBatch: StagedBatchCheque[]
+  ): { status: StagedBatchCheque["validationStatus"]; notes?: string; duplicateLevel: StagedBatchCheque["duplicateLevel"] } => {
+    const fakeProcessed: ProcessedDocumentItem = {
+      temporaryId: chq.temporaryId || chq.id,
+      sequence: chq.installmentIndex || 1,
+      sourceFileName: chq.sourcePdfFileName || "cheque.jpg",
+      sourceMimeType: "image/jpeg",
+      processingStatus: "COMPLETED",
+      retryCount: 0,
+      ocrAttempt: 1,
+      validationStatus: "VALID",
+      duplicateLevel: "NONE",
+      confidence: chq.confidence,
+      normalizedData: {
+        chequeNumber: chq.chequeNumber,
+        bankName: chq.bankName,
+        amount: chq.amount,
+        dueDate: chq.dueDate,
+        drawerName: chq.drawerName,
+        accountNumber: chq.accountNumber || "",
+      },
+      isManuallyEdited: Boolean(chq.isManuallyEdited),
+      imagePreview: chq.imagePreview || "",
+      processedAt: new Date().toISOString(),
+    };
+
+    const otherItems: ProcessedDocumentItem[] = allBatch
+      .filter((other) => other.id !== chq.id)
+      .map((other) => ({
+        temporaryId: other.temporaryId || other.id,
+        sequence: other.installmentIndex || 1,
+        sourceFileName: other.sourcePdfFileName || "cheque.jpg",
+        sourceMimeType: "image/jpeg",
+        processingStatus: "COMPLETED",
+        retryCount: 0,
+        ocrAttempt: 1,
+        validationStatus: "VALID",
+        duplicateLevel: "NONE",
+        confidence: other.confidence,
+        normalizedData: {
+          chequeNumber: other.chequeNumber,
+          bankName: other.bankName,
+          amount: other.amount,
+          dueDate: other.dueDate,
+          drawerName: other.drawerName,
+          accountNumber: other.accountNumber || "",
+        },
+        isManuallyEdited: Boolean(other.isManuallyEdited),
+        imagePreview: other.imagePreview || "",
+        processedAt: new Date().toISOString(),
+      }));
+
+    const targetSlot = targetInstallments.find((t) => t.id === chq.installmentId);
+    return validateChequeItem(fakeProcessed, otherItems, cheques, targetSlot);
+  };
+
+  // Handle Multi-file, Multi-page PDF, or Multi-cheque Upload
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
+    // Reset input immediately so selecting the exact same file in a future click triggers onChange
+    e.target.value = "";
+
     setIsProcessingOcr(true);
     setOcrProgressText(
       isAr
-        ? `جاري فحص وقراءة ${files.length} ملف/صورة بالذكاء الاصطناعي...`
-        : `Analyzing and scanning ${files.length} image(s) via AI OCR...`
+        ? `جاري فحص وتجهيز ${files.length} مستند/ملف...`
+        : `Inspecting and preparing ${files.length} document(s)...`
     );
 
     try {
-      const allExtractedItems: any[] = [];
+      const allInputs: DocumentProcessingInput[] = [];
 
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
-        setOcrProgressText(
-          isAr
-            ? `معالجة الملف (${i + 1}/${files.length}): ${file.name}...`
-            : `Processing file (${i + 1}/${files.length}): ${file.name}...`
-        );
+        const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
 
-        const base64 = await new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(reader.result as string);
-          reader.onerror = reject;
-          reader.readAsDataURL(file);
-        });
+        if (isPdf) {
+          setOcrProgressText(
+            isAr
+              ? `معالجة مستند PDF (${i + 1}/${files.length}): ${file.name}...`
+              : `Processing PDF (${i + 1}/${files.length}): ${file.name}...`
+          );
 
-        const items = await processImagePayload(base64, file.type || "image/jpeg");
-        allExtractedItems.push(...items);
+          const pdfResult = await PdfIngestionService.ingestPdfForChequeBatch(
+            file,
+            {
+              contractId: leaseId,
+              entityType: propertyId ? "PROPERTY" : "LEASE",
+              entityId: leaseId || propertyId || "BATCH",
+              uploadedBy: currentUser?.nameAr || currentUser?.username,
+            },
+            (msg) => setOcrProgressText(msg)
+          );
+
+          allInputs.push(...pdfResult.documentInputs);
+        } else {
+          setOcrProgressText(
+            isAr
+              ? `قراءة الصورة (${i + 1}/${files.length}): ${file.name}...`
+              : `Reading image (${i + 1}/${files.length}): ${file.name}...`
+          );
+
+          const dataUrl = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result as string);
+            reader.onerror = reject;
+            reader.readAsDataURL(file);
+          });
+
+          allInputs.push({
+            sourceType: "FILE_UPLOAD",
+            fileName: file.name,
+            mimeType: file.type || "image/jpeg",
+            imageBase64: dataUrl,
+            originalSourceDataUrl: dataUrl,
+          });
+        }
       }
 
-      if (allExtractedItems.length > 0) {
-        processAndStageExtractedCheques(allExtractedItems, files.length);
+      if (allInputs.length === 0) {
+        alert(isAr ? "لم يتم العثور على مستندات صالحة للمسح." : "No valid documents found to scan.");
+        return;
+      }
+
+      setOcrProgressText(isAr ? `بدء استخراج الشيكات بالذكاء الاصطناعي...` : `Extracting cheques with AI OCR...`);
+      const batchRes = await DocumentSessionService.processBatch(
+        allInputs,
+        currentSession || undefined,
+        cheques,
+        availableInstallments,
+        (msg) => setOcrProgressText(msg)
+      );
+
+      if (batchRes.items.length > 0) {
+        stageProcessedItems(batchRes.items, files.length, stagedCheques.length > 0);
       } else {
         alert(
           isAr
@@ -458,12 +422,49 @@ export const BatchChequeOcrModal: React.FC<BatchChequeOcrModalProps> = ({
     }
   };
 
-  // Re-scan individual cheque
+  // Handle Hardware Scanner Capture
+  const handleHardwareScanComplete = async (imageBase64: string, mimeType: string) => {
+    setIsHardwareScannerOpen(false);
+    setIsProcessingOcr(true);
+    setOcrProgressText(isAr ? "جاري قراءة صورة الماسح الضوئي بالذكاء الاصطناعي..." : "Processing hardware scan with AI OCR...");
+
+    try {
+      const input: DocumentProcessingInput = {
+        sourceType: "HARDWARE_SCANNER",
+        fileName: `scanner-${Date.now()}.jpg`,
+        mimeType: mimeType || "image/jpeg",
+        imageBase64,
+        originalSourceDataUrl: imageBase64,
+      };
+
+      const res = await DocumentSessionService.processSingleDocument(
+        input,
+        currentSession || undefined,
+        [],
+        cheques,
+        availableInstallments[stagedCheques.length]
+      );
+
+      if (res.item) {
+        stageProcessedItems([res.item], 1, stagedCheques.length > 0);
+      }
+    } catch (err: any) {
+      console.error("Hardware scan OCR error:", err);
+      alert(isAr ? `فشل المسح: ${err.message || ""}` : `Scan failed: ${err.message || ""}`);
+    } finally {
+      setIsProcessingOcr(false);
+      setOcrProgressText("");
+    }
+  };
+
+  // Re-scan individual cheque file replacement
   const handleSingleRescan = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0 || !singleScanTargetId) return;
 
     const file = files[0];
+    e.target.value = "";
+
     setIsProcessingOcr(true);
     setOcrProgressText(isAr ? "جاري إعادة مسح الشيك المحدد..." : "Rescanning selected cheque...");
 
@@ -475,25 +476,52 @@ export const BatchChequeOcrModal: React.FC<BatchChequeOcrModalProps> = ({
         reader.readAsDataURL(file);
       });
 
-      const ocrResult = await extractChequeOCR(base64, file.type || "image/jpeg");
-      const normalized = normalizeChequeOCR(ocrResult, isAr ? "ar" : "en");
+      const existing = stagedCheques.find((s) => s.id === singleScanTargetId);
+      const targetSlot = targetInstallments.find((t) => t.id === existing?.installmentId);
+
+      const input: DocumentProcessingInput = {
+        temporaryId: existing?.temporaryId || singleScanTargetId,
+        sourceType: "SINGLE_RESCAN",
+        fileName: file.name,
+        mimeType: file.type || "image/jpeg",
+        imageBase64: base64,
+        originalSourceDataUrl: base64,
+        existingCorrections: existing?.manualCorrections,
+        isManuallyEdited: existing?.isManuallyEdited,
+      };
+
+      const res = await DocumentSessionService.processSingleDocument(
+        input,
+        currentSession || undefined,
+        [],
+        cheques,
+        targetSlot
+      );
 
       setStagedCheques((prev) =>
         prev.map((item) => {
           if (item.id === singleScanTargetId) {
             const updated: StagedBatchCheque = {
               ...item,
-              chequeNumber: normalized.chequeNumber || item.chequeNumber,
-              bankName: normalized.bankName || item.bankName,
-              amount: normalized.amount > 0 ? normalized.amount : item.amount,
-              dueDate: normalized.dueDate || item.dueDate,
-              drawerName: normalized.drawerName || item.drawerName,
+              chequeNumber: res.item.normalizedData.chequeNumber || item.chequeNumber,
+              bankName: res.item.normalizedData.bankName || item.bankName,
+              amount: res.item.normalizedData.amount > 0 ? res.item.normalizedData.amount : item.amount,
+              dueDate: res.item.normalizedData.dueDate || item.dueDate,
+              drawerName: res.item.normalizedData.drawerName || item.drawerName,
               imagePreview: base64,
-              confidence: 0.95,
-              isManuallyEdited: false,
+              confidence: res.item.confidence || 0.95,
+              originalOcrAmount: res.item.originalOcrData?.amount,
+              originalOcrChequeNumber: res.item.originalOcrData?.chequeNumber,
+              originalOcrDueDate: res.item.originalOcrData?.dueDate,
+              originalOcrBankName: res.item.originalOcrData?.bankName,
             };
-            const v = validateCheque(updated, prev);
-            return { ...updated, validationStatus: v.status, validationNotes: v.notes, duplicateLevel: v.duplicateLevel };
+            const v = revalidateCheque(updated, prev);
+            return {
+              ...updated,
+              validationStatus: v.status,
+              validationNotes: v.notes,
+              duplicateLevel: v.duplicateLevel,
+            };
           }
           return item;
         })
@@ -509,7 +537,7 @@ export const BatchChequeOcrModal: React.FC<BatchChequeOcrModalProps> = ({
     }
   };
 
-  // In-line manual field edits (Protected from silent overwrite)
+  // Manual field edit in staging (Protected from overwrite)
   const handleUpdateStagedField = (
     id: string,
     field: keyof StagedBatchCheque,
@@ -518,20 +546,28 @@ export const BatchChequeOcrModal: React.FC<BatchChequeOcrModalProps> = ({
     setStagedCheques((prev) => {
       const updatedList = prev.map((item) => {
         if (item.id === id) {
-          const updatedItem = {
+          const corrections = {
+            ...(item.manualCorrections || {}),
+            [field]: value,
+          };
+          return {
             ...item,
             [field]: value,
             isManuallyEdited: true,
+            manualCorrections: corrections,
           };
-          return updatedItem;
         }
         return item;
       });
 
-      // Re-run validation
       return updatedList.map((chq) => {
-        const v = validateCheque(chq, updatedList);
-        return { ...chq, validationStatus: v.status, validationNotes: v.notes, duplicateLevel: v.duplicateLevel };
+        const v = revalidateCheque(chq, updatedList);
+        return {
+          ...chq,
+          validationStatus: v.status,
+          validationNotes: v.notes,
+          duplicateLevel: v.duplicateLevel,
+        };
       });
     });
   };
@@ -555,13 +591,18 @@ export const BatchChequeOcrModal: React.FC<BatchChequeOcrModalProps> = ({
       });
 
       return updatedList.map((chq) => {
-        const v = validateCheque(chq, updatedList);
-        return { ...chq, validationStatus: v.status, validationNotes: v.notes, duplicateLevel: v.duplicateLevel };
+        const v = revalidateCheque(chq, updatedList);
+        return {
+          ...chq,
+          validationStatus: v.status,
+          validationNotes: v.notes,
+          duplicateLevel: v.duplicateLevel,
+        };
       });
     });
   };
 
-  // Add a new empty manual cheque row to staging
+  // Add empty manual cheque row to staging
   const handleAddManualRow = () => {
     const nextIdx = stagedCheques.length + 1;
     const nextInstallment = availableInstallments[stagedCheques.length];
@@ -569,6 +610,7 @@ export const BatchChequeOcrModal: React.FC<BatchChequeOcrModalProps> = ({
 
     const newRow: StagedBatchCheque = {
       id: newId,
+      temporaryId: newId,
       installmentId: nextInstallment?.id,
       installmentIndex: nextInstallment ? nextInstallment.installmentNumber : nextIdx,
       chequeNumber: "",
@@ -584,6 +626,8 @@ export const BatchChequeOcrModal: React.FC<BatchChequeOcrModalProps> = ({
       validationStatus: "MISSING_INFO",
       validationNotes: isAr ? "بانتظار إدخال رقم الشيك والبنك" : "Waiting for cheque number and bank",
       duplicateLevel: "NONE",
+      isManuallyEdited: true,
+      sessionId: currentSession?.sessionId,
     };
 
     setStagedCheques((prev) => [...prev, newRow]);
@@ -603,6 +647,19 @@ export const BatchChequeOcrModal: React.FC<BatchChequeOcrModalProps> = ({
     setStagedCheques((prev) => [...prev, { ...item, installmentIndex: prev.length + 1 }]);
   };
 
+  // Clear current batch and start completely fresh
+  const handleClearBatch = () => {
+    if (stagedCheques.length > 0) {
+      const confirmClear = confirm(isAr ? "هل ترغب بإعادة تعيين كافة الشيكات الممسوحة والبدء من جديد؟" : "Clear all staged cheques and start over?");
+      if (!confirmClear) return;
+    }
+    setStagedCheques([]);
+    setUnassignedCheques([]);
+    setUploadedFilesCount(0);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    if (singleFileInputRef.current) singleFileInputRef.current.value = "";
+  };
+
   // Final Commit / Approve (Atomic, with double-submit protection & archive idempotency)
   const handleConfirmAndSave = async () => {
     if (stagedCheques.length === 0) {
@@ -610,9 +667,7 @@ export const BatchChequeOcrModal: React.FC<BatchChequeOcrModalProps> = ({
       return;
     }
 
-    const invalidCheques = stagedCheques.filter(
-      (c) => c.validationStatus !== "VALID"
-    );
+    const invalidCheques = stagedCheques.filter((c) => c.validationStatus !== "VALID");
     if (invalidCheques.length > 0) {
       const confirmForce = confirm(
         isAr
@@ -626,7 +681,7 @@ export const BatchChequeOcrModal: React.FC<BatchChequeOcrModalProps> = ({
     try {
       // Archive images safely and idempotently
       for (const chq of stagedCheques) {
-        if (chq.imagePreview && chq.imagePreview.startsWith("data:")) {
+        if (chq.imagePreview && chq.imagePreview.startsWith("data:") && !chq.sourcePdfId) {
           try {
             await DocumentStorageService.uploadAndArchive(chq.imagePreview, {
               category: "CHEQUES",
@@ -671,13 +726,13 @@ export const BatchChequeOcrModal: React.FC<BatchChequeOcrModalProps> = ({
         onClose={onClose}
         title={
           isAr
-            ? "المسح الذكي لمجموعة الشيكات دفعة واحدة (Multi-Check Batch OCR / Scanner)"
-            : "Multi-Check Batch OCR & Auto-Assignment"
+            ? "المسح الذكي لمجموعة الشيكات دفعة واحدة (Multi-Check Batch OCR / PDF / Scanner)"
+            : "Multi-Check Batch OCR & PDF Auto-Assignment"
         }
         subtitle={
           isAr
-            ? "مسح وفصل مجموعة شيكات العقد تلقائياً، والترتيب الزمني، والتوزيع الذكي على الأقساط"
-            : "Automated multi-cheque detection, chronological sorting, and installment assignment"
+            ? "مسح وفصل مجموعة شيكات العقد تلقائياً (صور أو ملف PDF متعدد الصفحات)، والترتيب والتوزيع الذكي"
+            : "Automated multi-cheque detection, PDF page rendering, chronological sorting, and installment mapping"
         }
         icon={<Layers className="w-5 h-5 text-purple-600" />}
         maxWidth="5xl"
@@ -717,8 +772,8 @@ export const BatchChequeOcrModal: React.FC<BatchChequeOcrModalProps> = ({
                 </div>
                 <p className="text-purple-900/80 text-[11px] leading-relaxed">
                   {isAr
-                    ? "يمكنك المسح المباشر من ماسح HP عبر الماسح الضوئي (ADF / Flatbed) أو رفع صورة واحدة مجمعة أو عدة صور لشيكات العقد. يقوم الذكاء الاصطناعي بالتعرف التلقائي عليها وفصلها وتوزيعها على جدول الأقساط."
-                    : "Scan directly via HP Hardware Scanner (ADF / Flatbed) or upload single/multi-page cheque images. AI extracts, sorts chronologically, and maps to installments."}
+                    ? "يدعم المسح المباشر من ماسح HP الضوئي، أو رفع ملف PDF متعدد الصفحات، أو صور الشيكات المجمعة. يتم التعرف الذكي عليها وفصل الصفحات وحفظ ملف PDF الأصلي في الأرشيف."
+                    : "Supports HP Hardware Scanner (ADF), multi-page PDF documents, or batch cheque images. AI extracts, sorts, maps installments, and preserves original PDF in archive."}
                 </p>
               </div>
 
@@ -744,10 +799,24 @@ export const BatchChequeOcrModal: React.FC<BatchChequeOcrModalProps> = ({
                   <Upload className="w-4 h-4" />
                   <span>
                     {stagedCheques.length > 0
-                      ? (isAr ? "رفع ملفات إضافية" : "Upload Additional")
-                      : (isAr ? "رفع ملفات / صورة مجمعة" : "Upload Cheques")}
+                      ? (isAr ? "رفع ملفات إضافية / PDF" : "Upload Additional / PDF")
+                      : (isAr ? "رفع صور / ملف PDF للشيكات" : "Upload Cheques / PDF")}
                   </span>
                 </button>
+
+                {/* Clear / Reset Trigger */}
+                {stagedCheques.length > 0 && (
+                  <button
+                    type="button"
+                    disabled={isProcessingOcr}
+                    onClick={handleClearBatch}
+                    className="px-3 py-2.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-xl font-bold flex items-center gap-1 cursor-pointer transition-all"
+                    title={isAr ? "إعادة تعيين وبدء مسح جديد" : "Clear & Start Over"}
+                  >
+                    <RotateCcw className="w-4 h-4 text-slate-600" />
+                    <span>{isAr ? "إعادة ضبط" : "Reset"}</span>
+                  </button>
+                )}
               </div>
             </div>
 
@@ -769,7 +838,7 @@ export const BatchChequeOcrModal: React.FC<BatchChequeOcrModalProps> = ({
                   <h4 className="font-black text-slate-900 text-sm">
                     {isAr ? "جدول مراجعة وتأكيد الشيكات الممسوحة:" : "Staged Cheques Review Table:"}
                   </h4>
-                  <span className="text-[11px] text-slate-500">
+                  <span className="text-[11px] text-slate-500 font-mono">
                     ({stagedCheques.length} {isAr ? "شيكات معتمدة" : "cheques"})
                   </span>
                 </div>
@@ -792,6 +861,7 @@ export const BatchChequeOcrModal: React.FC<BatchChequeOcrModalProps> = ({
                   <thead>
                     <tr className="bg-slate-100/80 text-slate-700 font-bold border-b border-slate-200 text-[11px]">
                       <th className="p-2.5 text-center w-16">{isAr ? "الدفعة" : "Inst #"}</th>
+                      <th className="p-2.5 text-start">{isAr ? "المصدر" : "Source"}</th>
                       <th className="p-2.5 text-start">{isAr ? "رقم الشيك" : "Cheque #"}</th>
                       <th className="p-2.5 text-start">{isAr ? "اسم البنك" : "Bank"}</th>
                       <th className="p-2.5 text-start">{isAr ? "المبلغ (درهم)" : "Amount (AED)"}</th>
@@ -843,15 +913,40 @@ export const BatchChequeOcrModal: React.FC<BatchChequeOcrModalProps> = ({
                             )}
                           </td>
 
+                          {/* Source Tracing Badge */}
+                          <td className="p-2.5">
+                            {chq.isPdfSource ? (
+                              <span
+                                className="px-2 py-0.5 rounded-md bg-blue-50 text-blue-800 border border-blue-200 font-mono text-[10px] inline-flex items-center gap-1"
+                                title={`PDF: ${chq.sourcePdfFileName || "document.pdf"}`}
+                              >
+                                <FileText className="w-3 h-3 text-blue-600 shrink-0" />
+                                <span>ص {chq.pageNumber || 1}</span>
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-mono text-[10px] inline-flex items-center gap-1">
+                                <Camera className="w-3 h-3 text-slate-500 shrink-0" />
+                                <span>{isAr ? "صورة" : "Image"}</span>
+                              </span>
+                            )}
+                          </td>
+
                           {/* Cheque Number */}
                           <td className="p-2.5">
-                            <input
-                              type="text"
-                              value={chq.chequeNumber}
-                              onChange={(e) => handleUpdateStagedField(chq.id, "chequeNumber", e.target.value)}
-                              placeholder="000123"
-                              className="w-28 px-2 py-1.5 font-mono font-bold bg-slate-50 border border-slate-200 rounded-lg outline-none focus:border-purple-500"
-                            />
+                            <div className="space-y-0.5">
+                              <input
+                                type="text"
+                                value={chq.chequeNumber}
+                                onChange={(e) => handleUpdateStagedField(chq.id, "chequeNumber", e.target.value)}
+                                placeholder="000123"
+                                className="w-28 px-2 py-1.5 font-mono font-bold bg-slate-50 border border-slate-200 rounded-lg outline-none focus:border-purple-500"
+                              />
+                              {chq.isManuallyEdited && (
+                                <span className="block text-[9px] text-amber-800 font-semibold">
+                                  {isAr ? "معدل يدوياً" : "Edited"}
+                                </span>
+                              )}
+                            </div>
                           </td>
 
                           {/* Bank */}
@@ -1028,8 +1123,8 @@ export const BatchChequeOcrModal: React.FC<BatchChequeOcrModalProps> = ({
               </div>
               <p className="text-slate-500 text-xs max-w-md mx-auto">
                 {isAr
-                  ? "اضغط على زر (مسح من الطابعة) أو (رفع ملفات) لاختيار صورة مجمعة أو عدة صور لشيكات الإيجار."
-                  : "Click Hardware Scan or Upload Cheques above to scan or upload multi-cheque sheets."}
+                  ? "اضغط على زر (مسح من الطابعة) أو (رفع صور / ملف PDF للشيكات) للبدء في قراءة الشيكات بالذكاء الاصطناعي."
+                  : "Click Hardware Scan or Upload Cheques/PDF to start scanning documents with AI OCR."}
               </p>
             </div>
           )}

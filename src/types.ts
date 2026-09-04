@@ -490,6 +490,14 @@ export interface Cheque {
 
   // Legacy Cheque Tracking (Optional)
   isLegacy?: boolean;
+
+  // Source PDF & Ingestion Tracing (Document Hardening)
+  sourceDocumentId?: string;
+  sourcePdfId?: string;
+  sourcePdfFileName?: string;
+  sourcePdfPageNumber?: number;
+  sourceCroppedRegion?: { x: number; y: number; width: number; height: number };
+  ingestionSessionId?: string;
 }
 
 export interface ChequeAuditEntry {
