@@ -37,6 +37,9 @@ export function isDuplicateBank(existingBanks: UaeBank[], newName: string): bool
  */
 export function getStoredCustomBanks(): UaeBank[] {
   try {
+    if (typeof window === "undefined" || typeof localStorage === "undefined") {
+      return [];
+    }
     const raw = localStorage.getItem(CUSTOM_BANKS_STORAGE_KEY);
     if (!raw) return [];
     return JSON.parse(raw);
@@ -45,6 +48,7 @@ export function getStoredCustomBanks(): UaeBank[] {
     return [];
   }
 }
+
 
 /**
  * Saves a new custom bank to localStorage

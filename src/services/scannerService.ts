@@ -255,6 +255,71 @@ export class ScannerService {
       error: "تعذر الاتصال بالماسح الضوئي. يرجى اختيار جهاز ماسح صالح أو استخدام الكاميرا.",
     };
   }
+
+  /**
+   * Acquire multi-page scan from ADF (Auto Document Feeder) or continuous batch
+   */
+  public async acquireBatchScan(options: ScanOptions & { maxPages?: number } = {}): Promise<{
+    success: boolean;
+    scans: ScanResult[];
+    totalAcquired: number;
+    error?: string;
+  }> {
+    const maxPages = options.maxPages || 20;
+    const scans: ScanResult[] = [];
+    const paperSource = options.paperSource || "feeder";
+
+    try {
+      // First attempt with feeder
+      const firstScan = await this.acquireScan({
+        ...options,
+        paperSource,
+      });
+
+      if (!firstScan.success) {
+        return {
+          success: false,
+          scans: [],
+          totalAcquired: 0,
+          error: firstScan.error,
+        };
+      }
+
+      scans.push(firstScan);
+
+      // If feeder mode, poll subsequent pages if bridge supports continuous scanning
+      let consecutiveFails = 0;
+      while (scans.length < maxPages && consecutiveFails < 1) {
+        try {
+          const nextScan = await this.acquireScan({
+            ...options,
+            paperSource: "feeder",
+          });
+          if (nextScan.success && nextScan.imageBase64 && nextScan.imageBase64 !== scans[scans.length - 1].imageBase64) {
+            scans.push(nextScan);
+            consecutiveFails = 0;
+          } else {
+            consecutiveFails++;
+          }
+        } catch {
+          consecutiveFails++;
+        }
+      }
+
+      return {
+        success: true,
+        scans,
+        totalAcquired: scans.length,
+      };
+    } catch (err: any) {
+      return {
+        success: scans.length > 0,
+        scans,
+        totalAcquired: scans.length,
+        error: scans.length === 0 ? (err.message || "Failed to acquire batch scan") : undefined,
+      };
+    }
+  }
 }
 
 export const scannerService = ScannerService.getInstance();
