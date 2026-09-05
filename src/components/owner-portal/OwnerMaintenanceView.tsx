@@ -34,10 +34,10 @@ export const OwnerMaintenanceView: React.FC<OwnerMaintenanceViewProps> = ({
   const metrics = useMemo(() => {
     const total = maintenanceRequests.length;
     const completed = maintenanceRequests.filter((m) => m.status === "COMPLETED");
-    const inProgress = maintenanceRequests.filter((m) => m.status === "IN_PROGRESS" || m.status === "APPROVED");
-    const pending = maintenanceRequests.filter((m) => m.status === "NEW" || m.status === "ESTIMATED");
-    const ownerBorne = maintenanceRequests.filter((m) => (m as any).costBearer === "OWNER");
-    const totalOwnerCost = ownerBorne.reduce((sum, m) => sum + (m.finalCost || m.estimatedCost || 0), 0);
+    const inProgress = maintenanceRequests.filter((m) => m.status === "IN_PROGRESS");
+    const pending = maintenanceRequests.filter((m) => m.status === "OPEN");
+    const ownerBorne = maintenanceRequests.filter((m) => m.costBearer === "OWNER");
+    const totalOwnerCost = ownerBorne.reduce((sum, m) => sum + (m.totalCost || 0), 0);
 
     return {
       total,
@@ -54,20 +54,20 @@ export const OwnerMaintenanceView: React.FC<OwnerMaintenanceViewProps> = ({
       if (statusFilter !== "ALL") {
         if (statusFilter === "COMPLETED" && m.status !== "COMPLETED") return false;
         if (statusFilter === "ACTIVE" && (m.status === "COMPLETED" || m.status === "CANCELLED" || m.status === "REJECTED")) return false;
-        if (statusFilter === "PENDING" && m.status !== "NEW" && m.status !== "ESTIMATED") return false;
+        if (statusFilter === "PENDING" && m.status !== "OPEN") return false;
       }
 
       if (bearerFilter !== "ALL") {
-        if (bearerFilter === "OWNER" && (m as any).costBearer !== "OWNER") return false;
-        if (bearerFilter === "TENANT" && (m as any).costBearer !== "TENANT") return false;
+        if (bearerFilter === "OWNER" && m.costBearer !== "OWNER") return false;
+        if (bearerFilter === "TENANT" && m.costBearer !== "TENANT") return false;
       }
 
       if (!searchTerm) return true;
       const term = searchTerm.toLowerCase();
-      const matchNum = (m.ticketNumber || "").toLowerCase().includes(term);
-      const matchTitle = (m.title || "").toLowerCase().includes(term);
-      const matchDesc = (m.description || "").toLowerCase().includes(term);
-      return matchNum || matchTitle || matchDesc;
+      const matchNum = (m.requestNumber || "").toLowerCase().includes(term);
+      const matchCat = (m.category || "").toLowerCase().includes(term);
+      const matchDesc = (m.issueDescription || "").toLowerCase().includes(term);
+      return matchNum || matchCat || matchDesc;
     });
   }, [maintenanceRequests, statusFilter, bearerFilter, searchTerm]);
 
@@ -193,24 +193,24 @@ export const OwnerMaintenanceView: React.FC<OwnerMaintenanceViewProps> = ({
                 filteredRequests.map((m) => {
                   const unit = units.find((u) => u.id === m.unitId);
                   const prop = unit ? properties.find((p) => p.id === unit.propertyId) : null;
-                  const cost = m.finalCost || m.estimatedCost || 0;
-                  const bearer = (m as any).costBearer || "OWNER";
+                  const cost = m.totalCost || 0;
+                  const bearer = m.costBearer || "OWNER";
 
                   return (
                     <tr key={m.id} className="hover:bg-slate-50/80 transition-colors">
                       <td className="py-3 px-4 font-mono font-bold text-slate-900">
-                        {m.ticketNumber || `TICK-${m.id.slice(0, 6)}`}
+                        {m.requestNumber || `MR-${m.id.slice(0, 6)}`}
                       </td>
                       <td className="py-3 px-4 font-mono text-slate-600 whitespace-nowrap">
-                        {m.createdAt ? m.createdAt.slice(0, 10) : "—"}
+                        {m.requestDate || (m as any).createdAt?.slice(0, 10) || "—"}
                       </td>
                       <td className="py-3 px-4 text-slate-700">
                         {prop ? (language === "ar" ? prop.nameAr : prop.nameEn) : "—"}
                         {unit && <span className="text-slate-400 font-mono text-[11px]"> • {unit.unitNumber}</span>}
                       </td>
                       <td className="py-3 px-4 text-slate-800 font-medium max-w-xs">
-                        <div className="font-bold text-slate-900 truncate">{m.title}</div>
-                        <div className="text-[11px] text-slate-500 line-clamp-1">{m.description}</div>
+                        <div className="font-bold text-slate-900 truncate">{m.category}</div>
+                        <div className="text-[11px] text-slate-500 line-clamp-1">{m.issueDescription}</div>
                       </td>
                       <td className="py-3 px-4">
                         <span

@@ -19,6 +19,8 @@ import { useData } from "../../context/DataContext";
 import { useLanguage } from "../../context/LanguageContext";
 import { useAuth } from "../../context/AuthContext";
 import { MaintenanceRequest, Cheque, Lease } from "../../types";
+import { isAuthorizedForTenantPortal } from "../../utils/portalNotificationFilter";
+import { resolveTenantForUser, getActiveTenantLeases } from "../../utils/tenantLeaseHelper";
 import { NewMaintenanceModal } from "../maintenance/NewMaintenanceModal";
 import { TenantUpdateMaintenanceModal } from "./TenantUpdateMaintenanceModal";
 import { Badge } from "../common/Badge";
@@ -30,7 +32,8 @@ export const TenantPortalView: React.FC = () => {
     cheques, 
     maintenanceRequests, 
     properties, 
-    units 
+    units,
+    isDataLoaded
   } = useData();
   const { t, language, formatAED } = useLanguage();
   const { currentUser } = useAuth();
@@ -41,35 +44,41 @@ export const TenantPortalView: React.FC = () => {
 
   const { notifications } = useData();
 
-  // Filter data for the logged-in tenant
+  // Robustly resolve tenant using authoritative ERP linkage (tenantId, email, phone, or name)
   const tenant = useMemo(() => {
-    if (!currentUser?.tenantId) return null;
-    return tenants.find(t => t.id === currentUser.tenantId);
+    return resolveTenantForUser(currentUser, tenants);
   }, [currentUser, tenants]);
 
+  const resolvedTenantId = tenant?.id || currentUser?.tenantId;
+
   const tenantLeases = useMemo(() => {
-    if (!currentUser?.tenantId) return [];
-    return leases.filter(l => l.tenantId === currentUser.tenantId);
-  }, [currentUser, leases]);
+    if (!resolvedTenantId) return [];
+    return leases.filter(l => l.tenantId === resolvedTenantId);
+  }, [resolvedTenantId, leases]);
+
+  const activeLeases = useMemo(() => {
+    if (!resolvedTenantId) return [];
+    return getActiveTenantLeases(resolvedTenantId, leases);
+  }, [resolvedTenantId, leases]);
 
   const hasActiveLease = useMemo(() => {
-    return tenantLeases.some(l => l.contractStatus === "ACTIVE");
-  }, [tenantLeases]);
+    return activeLeases.length > 0;
+  }, [activeLeases]);
 
   const tenantCheques = useMemo(() => {
-    if (!currentUser?.tenantId) return [];
-    return cheques.filter(c => c.tenantId === currentUser.tenantId);
-  }, [currentUser, cheques]);
+    if (!resolvedTenantId) return [];
+    return cheques.filter(c => c.tenantId === resolvedTenantId);
+  }, [resolvedTenantId, cheques]);
 
   const tenantMaintenance = useMemo(() => {
-    if (!currentUser?.tenantId) return [];
-    return maintenanceRequests.filter(m => m.tenantId === currentUser.tenantId);
-  }, [currentUser, maintenanceRequests]);
+    if (!resolvedTenantId) return [];
+    return maintenanceRequests.filter(m => m.tenantId === resolvedTenantId);
+  }, [resolvedTenantId, maintenanceRequests]);
 
   const tenantNotifications = useMemo(() => {
-    if (!currentUser?.tenantId) return [];
-    return notifications.filter(n => n.tenantId === currentUser.tenantId);
-  }, [currentUser, notifications]);
+    if (!resolvedTenantId) return [];
+    return notifications.filter(n => isAuthorizedForTenantPortal(n, resolvedTenantId, tenant?.phone));
+  }, [resolvedTenantId, notifications, tenant]);
 
   const bouncedCheques = useMemo(() => {
     return tenantCheques.filter(c => c.status === "BOUNCED");
@@ -83,7 +92,7 @@ export const TenantPortalView: React.FC = () => {
     return tenantMaintenance.filter(m => m.status === "RETURNED");
   }, [tenantMaintenance]);
 
-  if (!currentUser?.tenantId) {
+  if (!currentUser?.tenantId && !tenant) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] text-center space-y-4">
         <div className="w-20 h-20 rounded-full bg-slate-100 flex items-center justify-center text-slate-400">
@@ -133,7 +142,7 @@ export const TenantPortalView: React.FC = () => {
       </div>
 
       {/* NO LEASE ALERT BANNER */}
-      {!hasActiveLease && (
+      {isDataLoaded && !hasActiveLease && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-3">
           <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
           <div>
@@ -206,8 +215,9 @@ export const TenantPortalView: React.FC = () => {
         <StatCard
           icon={<Building className="w-5 h-5 text-indigo-600" />}
           label={language === "ar" ? "عقود الإيجار النشطة" : "Active Leases"}
-          value={tenantLeases.filter(l => l.contractStatus === "ACTIVE").length.toString()}
+          value={activeLeases.length.toString()}
           color="indigo"
+          isLoading={!isDataLoaded}
         />
         <StatCard
           icon={<CreditCard className="w-5 h-5 text-rose-600" />}
@@ -215,18 +225,21 @@ export const TenantPortalView: React.FC = () => {
           value={bouncedCheques.length.toString()}
           color="rose"
           highlight={bouncedCheques.length > 0}
+          isLoading={!isDataLoaded}
         />
         <StatCard
           icon={<Wrench className="w-5 h-5 text-amber-600" />}
           label={language === "ar" ? "طلبات صيانة نشطة" : "Active Maintenance"}
           value={activeMaintenance.length.toString()}
           color="amber"
+          isLoading={!isDataLoaded}
         />
         <StatCard
           icon={<Bell className="w-5 h-5 text-indigo-600" />}
           label={language === "ar" ? "التنبيهات والإشعارات" : "Notifications"}
           value={tenantNotifications.length.toString()}
           color="indigo"
+          isLoading={!isDataLoaded}
         />
       </div>
 
@@ -434,8 +447,8 @@ export const TenantPortalView: React.FC = () => {
       <NewMaintenanceModal 
         isOpen={isNewMaintenanceModalOpen}
         onClose={() => setIsNewMaintenanceModalOpen(false)}
-        initialUnitId={tenantLeases.find(l => l.contractStatus === "ACTIVE")?.unitId}
-        initialPropertyId={tenantLeases.find(l => l.contractStatus === "ACTIVE")?.propertyId}
+        initialUnitId={activeLeases[0]?.unitId}
+        initialPropertyId={activeLeases[0]?.propertyId}
       />
 
       <TenantUpdateMaintenanceModal
@@ -447,15 +460,19 @@ export const TenantPortalView: React.FC = () => {
   );
 };
 
-const StatCard: React.FC<{ icon: React.ReactNode; label: string; value: string; color: string; highlight?: boolean }> = ({
-  icon, label, value, color, highlight
+const StatCard: React.FC<{ icon: React.ReactNode; label: string; value: string; color: string; highlight?: boolean; isLoading?: boolean }> = ({
+  icon, label, value, color, highlight, isLoading
 }) => (
   <div className={`p-5 rounded-2xl border bg-white shadow-xs transition-all ${highlight ? 'ring-2 ring-rose-500/20 border-rose-200' : 'border-slate-200 hover:border-slate-300'}`}>
     <div className="flex items-start justify-between">
       <div className={`p-2.5 rounded-xl bg-${color}-50`}>
         {icon}
       </div>
-      <span className={`text-2xl font-black text-slate-900 ${highlight ? 'text-rose-600' : ''}`}>{value}</span>
+      {isLoading ? (
+        <div className="w-8 h-8 rounded-full border-2 border-slate-200 border-t-slate-800 animate-spin"></div>
+      ) : (
+        <span className={`text-2xl font-black text-slate-900 ${highlight ? 'text-rose-600' : ''}`}>{value}</span>
+      )}
     </div>
     <div className="mt-3">
       <span className="text-xs font-bold text-slate-500">{label}</span>

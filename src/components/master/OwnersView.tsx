@@ -20,7 +20,7 @@ import { DocumentPreviewModal } from "../common/DocumentPreviewModal";
 export const OwnersView: React.FC = () => {
   const { t, language } = useLanguage();
   const { owners, properties, units, addOwner, updateOwner, deleteOwner, importOwnersBatch, archive, addArchiveItem, deleteArchiveItem, uploadAndArchiveDocument, getNextOwnerCode } = useData();
-  const { hasPermission, currentUser } = useAuth();
+  const { hasPermission, currentUser, provisionPortalAccount, getPortalAccountInfo } = useAuth();
   
   const canDelete = hasPermission("DELETE_RECORDS");
   const [selected360OwnerId, setSelected360OwnerId] = useState<string | null>(null);
@@ -581,6 +581,14 @@ export const OwnersView: React.FC = () => {
         captureDate,
         readerInformation,
       });
+      provisionPortalAccount({
+        portalRole: "OWNER",
+        targetId: editingOwner.id,
+        email,
+        nameEn,
+        nameAr,
+        phone,
+      });
     } else {
       
       const newOwner = addOwner({
@@ -611,6 +619,16 @@ export const OwnersView: React.FC = () => {
         captureDate,
         readerInformation,
       });
+      if (newOwner) {
+        provisionPortalAccount({
+          portalRole: "OWNER",
+          targetId: newOwner.id,
+          email,
+          nameEn,
+          nameAr,
+          phone,
+        });
+      }
       if (newOwner && smartCaptureArchiveDoc) {
         await uploadAndArchiveDocument(smartCaptureArchiveDoc.base64, {
           category: "EMIRATES_ID",
@@ -728,6 +746,7 @@ export const OwnersView: React.FC = () => {
         {filteredOwners.map((owner) => {
           const ownerProperties = properties.filter((p) => p.ownerId === owner.id);
           const ownerUnitsCount = ownerProperties.reduce((sum, p) => sum + p.totalUnits, 0);
+          const portalInfo = getPortalAccountInfo(owner.id, "OWNER", owner.email);
 
           return (
             <DraggableWrapper key={owner.id} formId="OWNERS" elementId={`card-${owner.id}`}>
@@ -737,9 +756,15 @@ export const OwnersView: React.FC = () => {
                 <div>
                 <div className="flex items-start justify-between gap-2 mb-2">
                   <div>
-                    <span className="text-[10px] font-mono font-bold text-amber-800 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200/70">
-                      {owner.code}
-                    </span>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-[10px] font-mono font-bold text-amber-800 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200/70">
+                        {owner.code}
+                      </span>
+                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border ${portalInfo.statusColorClass}`}>
+                        <span className="w-1.5 h-1.5 rounded-full bg-current" />
+                        <span>{language === "ar" ? portalInfo.statusLabelAr : portalInfo.statusLabelEn}</span>
+                      </span>
+                    </div>
                     <h3 className="text-base font-bold text-slate-900 mt-1.5">
                       {language === "ar" ? owner.nameAr : owner.nameEn}
                     </h3>

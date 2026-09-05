@@ -2813,6 +2813,70 @@ app.post("/api/connections/send-test-whatsapp", async (req, res) => {
   }
 });
 
+// Dispatch Portal Access Email
+app.post("/api/notifications/dispatch-portal-access", async (req, res) => {
+  try {
+    const { recipient, role, name, username, password, portalUrl } = req.body;
+    
+    if (!recipient) {
+      return res.status(400).json({ success: false, error: "Recipient email is required" });
+    }
+
+    const configs = loadConfigs();
+    const secrets = loadSecrets();
+    const gmail = configs.gmail;
+
+    const portalName = role === "OWNER" ? "بوابة المالك" : "بوابة المستأجر";
+    const subject = `${portalName} — Emirates Falcon ERP`;
+    const messageBody = `
+عزيزي/عزيزتي ${name}،
+
+تم إنشاء حسابك في ${portalName} بنجاح.
+يمكنك الآن الدخول إلى البوابة باستخدام بيانات الاعتماد التالية:
+
+اسم المستخدم: ${username}
+كلمة المرور المؤقتة: ${password}
+
+رابط الدخول: ${portalUrl}
+
+يرجى ملاحظة أنه سيُطلب منك تغيير كلمة المرور المؤقتة عند تسجيل الدخول لأول مرة.
+
+مع تحيات،
+صقر الإمارات للعقارات
+    `.trim();
+
+    if (gmail && gmail.smtpUser && secrets.smtpAppPassword) {
+      const transporter = nodemailer.createTransport({
+        host: gmail.smtpHost,
+        port: gmail.smtpPort,
+        secure: gmail.encryption === "SSL",
+        auth: {
+          user: gmail.smtpUser,
+          pass: secrets.smtpAppPassword,
+        },
+        tls: { rejectUnauthorized: true },
+      });
+
+      const mailOptions = {
+        from: `"${gmail.senderName || 'Emirates Falcon'}" <${gmail.smtpUser}>`,
+        to: recipient,
+        subject: subject,
+        text: messageBody,
+      };
+
+      await transporter.sendMail(mailOptions);
+      console.log(`[Portal Provisioning] Access email dispatched to ${recipient}`);
+    } else {
+      console.log(`[Portal Provisioning] (Mock) Access email intended for ${recipient} via SMTP. SMTP not configured.`);
+    }
+
+    return res.json({ success: true, status: "DISPATCHED", recipient });
+  } catch (err: any) {
+    console.error("[Portal Provisioning] Email dispatch error:", err);
+    return res.status(500).json({ success: false, error: err?.message || "Failed to dispatch portal access email" });
+  }
+});
+
 // Notification Dispatch (Email / SMS / WhatsApp reminders)
 app.post("/api/notifications/dispatch", async (req, res) => {
   try {

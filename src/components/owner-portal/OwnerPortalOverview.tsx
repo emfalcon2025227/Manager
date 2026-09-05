@@ -33,10 +33,10 @@ interface OwnerPortalOverviewProps {
 
 export const OwnerPortalOverview: React.FC<OwnerPortalOverviewProps> = ({
   owner,
-  properties,
-  units,
-  leases,
-  cheques,
+  properties = [],
+  units = [],
+  leases = [],
+  cheques = [],
   onNavigateTab,
 }) => {
   const { language, formatAED, dir } = useLanguage();
@@ -72,16 +72,18 @@ export const OwnerPortalOverview: React.FC<OwnerPortalOverviewProps> = ({
 
   // Unit occupancy analytics
   const unitStats = useMemo(() => {
+    if (!units) return { total: 0, occupied: 0, vacant: 0, maintenance: 0, occupancyRate: 0 };
     const total = units.length;
     const occupied = units.filter((u) => u.status === "OCCUPIED").length;
     const vacant = units.filter((u) => u.status === "VACANT").length;
-    const maintenance = units.filter((u) => u.status === "UNDER_MAINTENANCE").length;
+    const maintenance = units.filter((u) => u.status === "MAINTENANCE").length;
     const occupancyRate = total > 0 ? Math.round((occupied / total) * 100) : 0;
     return { total, occupied, vacant, maintenance, occupancyRate };
   }, [units]);
 
   // Total annualized contract value
   const totalAnnualRent = useMemo(() => {
+    if (!leases) return 0;
     return leases
       .filter((l) => l.contractStatus === "ACTIVE")
       .reduce((sum, l) => sum + (l.annualRent || 0), 0);
@@ -89,9 +91,10 @@ export const OwnerPortalOverview: React.FC<OwnerPortalOverviewProps> = ({
 
   // Cheque breakdown
   const chequeStats = useMemo(() => {
+    if (!cheques) return { totalCount: 0, collectedCount: 0, collectedAmt: 0, pendingCount: 0, pendingAmt: 0, depositedCount: 0, bouncedCount: 0, bouncedAmt: 0 };
     const totalCount = cheques.length;
     const collected = cheques.filter((c) => c.status === "COLLECTED" || c.status === "CLEARED");
-    const pending = cheques.filter((c) => c.status === "PENDING" || c.status === "UNDER_COLLECTION");
+    const pending = cheques.filter((c) => c.status === "POST_DATED" || (c.status as string) === "PENDING");
     const deposited = cheques.filter((c) => c.status === "DEPOSITED");
     const bounced = cheques.filter((c) => c.status === "BOUNCED");
 
@@ -113,6 +116,7 @@ export const OwnerPortalOverview: React.FC<OwnerPortalOverviewProps> = ({
 
   // Pending maintenance count
   const activeMaintenanceCount = useMemo(() => {
+    if (!maintenanceRequests || !units) return 0;
     const unitIds = new Set(units.map((u) => u.id));
     return maintenanceRequests.filter(
       (m) => unitIds.has(m.unitId) && m.status !== "COMPLETED" && m.status !== "CANCELLED" && m.status !== "REJECTED"

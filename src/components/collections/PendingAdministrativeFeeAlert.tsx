@@ -2,15 +2,27 @@ import React, { useMemo } from 'react';
 import { useData } from '../../context/DataContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { useNavigation } from '../../context/NavigationContext';
+import { useAuth } from '../../context/AuthContext';
 import { AlertCircle } from 'lucide-react';
 
 export const PendingAdministrativeFeeAlert: React.FC = () => {
   const { commissions } = useData();
   const { language } = useLanguage();
-  const { navigateTo } = useNavigation();
+  const { navigateTo, currentView } = useNavigation();
+  const { loginMode, currentUser } = useAuth();
+
+  const isPortalUser =
+    loginMode === "TENANT" ||
+    loginMode === "OWNER" ||
+    currentUser?.role === "TENANT" ||
+    currentUser?.role === "OWNER" ||
+    currentUser?.role === "PROPERTY_OWNER" ||
+    currentView === "OWNER_PORTAL" ||
+    currentView === "TENANT_PORTAL";
 
   // Find all pending ADMIN_FEE records based strictly on financial truth
   const pendingAdminFees = useMemo(() => {
+    if (isPortalUser) return [];
     return commissions.filter((c) => {
       // Must be ADMIN_FEE
       if (c.commissionType !== "ADMIN_FEE") return false;
@@ -24,9 +36,9 @@ export const PendingAdministrativeFeeAlert: React.FC = () => {
       // Must have positive outstanding balance
       return c.totalCommissionAmount > collected && outstanding > 0;
     });
-  }, [commissions]);
+  }, [commissions, isPortalUser]);
 
-  if (pendingAdminFees.length === 0) return null;
+  if (isPortalUser || pendingAdminFees.length === 0) return null;
 
   const totalOutstanding = pendingAdminFees.reduce(
     (sum, fee) => sum + (fee.totalCommissionAmount - (fee.collectedAmount || 0)), 

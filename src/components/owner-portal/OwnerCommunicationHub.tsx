@@ -14,6 +14,10 @@ import {
 import { useLanguage } from "../../context/LanguageContext";
 import { useData } from "../../context/DataContext";
 import { Owner, Property } from "../../types";
+import {
+  isAuthorizedForOwnerPortal,
+  filterOwnerPortalCommunications,
+} from "../../utils/portalNotificationFilter";
 
 interface OwnerCommunicationHubProps {
   owner: Owner;
@@ -37,18 +41,17 @@ export const OwnerCommunicationHub: React.FC<OwnerCommunicationHubProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  // Communications related to this owner
+  // Communications strictly authorized for this owner portal
   const ownerCommunications = useMemo(() => {
-    return operationalCommunications
-      .filter((c) => c.recipientId === owner.id || c.senderId === owner.id || (c as any).ownerId === owner.id)
-      .sort((a, b) => new Date(b.sentAt || b.createdAt).getTime() - new Date(a.sentAt || a.createdAt).getTime());
+    return filterOwnerPortalCommunications(operationalCommunications, owner.id)
+      .sort((a, b) => new Date(b.sentAt || b.createdAt || 0).getTime() - new Date(a.sentAt || a.createdAt || 0).getTime());
   }, [operationalCommunications, owner.id]);
 
-  // Notifications addressed to owner
+  // Notifications strictly authorized for this owner portal (excluding internal ERP & Admin fee alerts)
   const ownerNotifications = useMemo(() => {
     return notifications
-      .filter((n) => n.recipientPhone === owner.phone || (n as any).ownerId === owner.id)
-      .sort((a, b) => new Date(b.sentAt || b.createdAt).getTime() - new Date(a.sentAt || a.createdAt).getTime());
+      .filter((n) => isAuthorizedForOwnerPortal(n, owner.id, owner.phone))
+      .sort((a, b) => new Date(b.sentAt || b.createdAt || 0).getTime() - new Date(a.sentAt || a.createdAt || 0).getTime());
   }, [notifications, owner.phone, owner.id]);
 
   const handleSubmitInquiry = (e: React.FormEvent) => {
@@ -60,6 +63,8 @@ export const OwnerCommunicationHub: React.FC<OwnerCommunicationHubProps> = ({
       addOperationalCommunication({
         direction: "INBOUND",
         channel: "PORTAL_MESSAGE",
+        status: "DELIVERED",
+        recipient: "Emirates Falcon Real Estate Management",
         senderId: owner.id,
         senderName: language === "ar" ? owner.nameAr : owner.nameEn,
         recipientId: "OFFICE",
@@ -259,7 +264,7 @@ export const OwnerCommunicationHub: React.FC<OwnerCommunicationHubProps> = ({
                     {notif.sentAt ? notif.sentAt.slice(0, 16).replace("T", " ") : notif.createdAt?.slice(0, 10)}
                   </span>
                 </div>
-                <p className="text-slate-700 leading-relaxed whitespace-pre-wrap">{notif.message}</p>
+                <p className="text-slate-700 leading-relaxed whitespace-pre-wrap">{notif.content || notif.message}</p>
               </div>
             ))}
           </div>

@@ -24,7 +24,7 @@ interface TenantsViewProps {
 export const TenantsView: React.FC<TenantsViewProps> = ({ onSelectTenant }) => {
   const { t, language } = useLanguage();
   const { tenants, addTenant, updateTenant, recalculateTenantRisk, deleteTenant, importTenantsBatch, archive, addArchiveItem, deleteArchiveItem, uploadAndArchiveDocument, getNextTenantCode } = useData();
-  const { hasPermission, currentUser, createUser, users } = useAuth();
+  const { hasPermission, currentUser, users, provisionPortalAccount } = useAuth();
   
   const canDelete = hasPermission("DELETE_RECORDS");
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -625,6 +625,15 @@ export const TenantsView: React.FC<TenantsViewProps> = ({ onSelectTenant }) => {
           captureDate,
           readerInformation,
         });
+        
+        provisionPortalAccount({
+          portalRole: "TENANT",
+          targetId: editingTenant.id,
+          email,
+          nameEn,
+          nameAr,
+          phone,
+        });
 
         if (smartCaptureArchiveDoc && uploadAndArchiveDocument) {
           await uploadAndArchiveDocument(smartCaptureArchiveDoc.base64, {
@@ -681,22 +690,15 @@ export const TenantsView: React.FC<TenantsViewProps> = ({ onSelectTenant }) => {
         }
         setSmartCaptureArchiveDoc(null);
 
-        if (email && email.trim()) {
-          const cleanEmail = email.trim().toLowerCase();
-          const emailExists = users.some(u => u.email.toLowerCase() === cleanEmail && u.role === "TENANT");
-          if (!emailExists) {
-            createUser({
-              username: cleanEmail,
-              email: cleanEmail,
-              nameEn: nameEn,
-              nameAr: nameAr,
-              password: "tenant@123",
-              phone: phone,
-              tenantId: newTenant.id,
-              role: "TENANT",
-              isActive: true
-            });
-          }
+        if (newTenant) {
+          provisionPortalAccount({
+            portalRole: "TENANT",
+            targetId: newTenant.id,
+            email,
+            nameEn,
+            nameAr,
+            phone,
+          });
         }
       }
       setIsModalOpen(false);

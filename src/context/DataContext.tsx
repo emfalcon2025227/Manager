@@ -110,6 +110,7 @@ import {
   FinancialPeriod,
   PeriodReconciliationReport,
   ForensicClosingCertification,
+  OperationalCommunicationRecord,
 } from "../types";
 import {
   reconcileFinancialPeriod,
@@ -243,6 +244,7 @@ import { useAuth } from "./AuthContext";
 export interface DataContextType {
 
   isQuotaExceeded: boolean;
+  isDataLoaded: boolean;
   owners: Owner[];
   properties: Property[];
   units: Unit[];
@@ -272,6 +274,7 @@ export interface DataContextType {
 
   // ERP Phase 1 Financial Foundation & Commissions
   commissions: CommissionObligation[];
+  commissionObligations: CommissionObligation[];
   paymentAllocations: PaymentAllocation[];
   financialReversals: FinancialReversalRecord[];
   financialAdjustments: FinancialAdjustmentRecord[];
@@ -629,7 +632,9 @@ export interface DataContextType {
   generateSecureDownloadToken: (id: string) => string;
   syncArchiveItemToDrive: (id: string) => Promise<{ success: boolean; driveLink?: string; error?: string }>;
 
-  // Notifications
+  // Notifications & Operational Communications
+  operationalCommunications: OperationalCommunicationRecord[];
+  addOperationalCommunication: (data: Omit<OperationalCommunicationRecord, "id" | "createdAt"> & { id?: string; createdAt?: string }) => Promise<{ success: boolean; id?: string }>;
   dispatchWhatsAppReminder: (chequeId: string) => Promise<{ success: boolean; message: string }>;
   dispatchEmailReminder: (chequeId: string) => Promise<{ success: boolean; message: string }>;
 
@@ -888,6 +893,13 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const { language } = useLanguage();
 
   const [isQuotaExceeded, setIsQuotaExceeded] = useState(false);
+  const [isDataLoaded, setIsDataLoaded] = useState(false);
+
+  useEffect(() => {
+    // Artificial brief loading state to prevent UI flashes during initial load
+    const timer = setTimeout(() => setIsDataLoaded(true), 1500);
+    return () => clearTimeout(timer);
+  }, []);
 
   const [owners, setOwners] = useState<Owner[]>(() => {
     return safeLoadFromStorage("ef_owners_v12", INITIAL_OWNERS);
@@ -1161,6 +1173,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   });
 
 
+  const [operationalCommunications, setOperationalCommunications] = useState<OperationalCommunicationRecord[]>(() => {
+    return safeLoadFromStorage("ef_operational_communications_v12", []);
+  });
+
   const [companyProfile, setCompanyProfile] = useState<CompanyProfile>(() => {
     const parsed = safeLoadFromStorage<CompanyProfile>("ef_company_profile_v12", DEFAULT_COMPANY_PROFILE);
     if (!parsed.addressAr || parsed.addressAr === "دبي، الإمارات العربية المتحدة") {
@@ -1207,6 +1223,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => { safeSaveToStorage("ef_archive_v12", archive); }, [archive]);
   useEffect(() => { safeSaveToStorage("ef_notifications_v12", notifications); }, [notifications]);
+  useEffect(() => { safeSaveToStorage("ef_operational_communications_v12", operationalCommunications); }, [operationalCommunications]);
   useEffect(() => { safeSaveToStorage("ef_risk_config_v12", riskConfig); }, [riskConfig]);
   useEffect(() => { safeSaveToStorage("ef_audit_logs_v12", auditLogs); }, [auditLogs]);
   useEffect(() => { safeSaveToStorage("ef_historical_records_v12", historicalRecords); }, [historicalRecords]);
@@ -7130,6 +7147,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       adjustments: financialAdjustments,
       reversals: financialReversals,
       leases,
+      tenants,
     });
   };
 
@@ -10302,6 +10320,20 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const addOperationalCommunication = async (
+    data: Omit<OperationalCommunicationRecord, "id" | "createdAt"> & { id?: string; createdAt?: string }
+  ): Promise<{ success: boolean; id?: string }> => {
+    const id = data.id || `comm-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    const newRecord: OperationalCommunicationRecord = {
+      ...data,
+      id,
+      createdAt: data.createdAt || new Date().toISOString(),
+    };
+    setOperationalCommunications((prev) => [newRecord, ...prev]);
+    safeSetDoc(doc(db, "operational_communications", id), newRecord);
+    return { success: true, id };
+  };
+
   // -------------------------------------------------------------
   // Risk Config
   // -------------------------------------------------------------
@@ -12782,6 +12814,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         addDailyDeposit,
         updateDailyDeposit,
         isQuotaExceeded,
+        isDataLoaded,
         checkFinancialEditPermission,
         owners,
         properties,
@@ -12925,6 +12958,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         legalSettings,
         updateLegalSettings,
         commissions,
+        commissionObligations: commissions,
         paymentAllocations,
         financialReversals,
         financialAdjustments,
@@ -12940,6 +12974,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         deleteJournalEntry,
         messageTemplates,
         updateMessageTemplate,
+        operationalCommunications,
+        addOperationalCommunication,
 
         ownerTransfers,
         propertyExpenses,

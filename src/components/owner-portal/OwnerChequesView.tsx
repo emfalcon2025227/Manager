@@ -34,7 +34,7 @@ export const OwnerChequesView: React.FC<OwnerChequesViewProps> = ({
   const metrics = useMemo(() => {
     const total = cheques.length;
     const collected = cheques.filter((c) => c.status === "COLLECTED" || c.status === "CLEARED");
-    const pending = cheques.filter((c) => c.status === "PENDING" || c.status === "UNDER_COLLECTION");
+    const pending = cheques.filter((c) => c.status === "POST_DATED" || (c.status as string) === "PENDING");
     const deposited = cheques.filter((c) => c.status === "DEPOSITED");
     const bounced = cheques.filter((c) => c.status === "BOUNCED");
 
@@ -57,7 +57,7 @@ export const OwnerChequesView: React.FC<OwnerChequesViewProps> = ({
     return cheques.filter((c) => {
       if (statusFilter !== "ALL") {
         if (statusFilter === "COLLECTED" && c.status !== "COLLECTED" && c.status !== "CLEARED") return false;
-        if (statusFilter === "PENDING" && c.status !== "PENDING" && c.status !== "UNDER_COLLECTION") return false;
+        if (statusFilter === "PENDING" && c.status !== "POST_DATED" && (c.status as string) !== "PENDING") return false;
         if (statusFilter === "DEPOSITED" && c.status !== "DEPOSITED") return false;
         if (statusFilter === "BOUNCED" && c.status !== "BOUNCED") return false;
       }

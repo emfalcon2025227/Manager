@@ -180,7 +180,7 @@ export const OwnerPropertiesReview: React.FC<OwnerPropertiesReviewProps> = ({
                         <span className="text-xs font-mono font-bold px-2 py-0.5 rounded-md bg-slate-200/70 text-slate-700">
                           {prop.code}
                         </span>
-                        <Badge variant="outline" className="text-[11px] font-bold">
+                        <Badge variant="default" className="text-[11px] font-bold">
                           {prop.type || (language === "ar" ? "مبنى سكني" : "Residential")}
                         </Badge>
                       </div>

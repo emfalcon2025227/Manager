@@ -48,6 +48,7 @@ import {
 import {
   runComprehensiveGoogleDriveDiagnostics,
   googleSignIn,
+  googleQuickDirectConnect,
   googleLogout,
   getGoogleUser,
   DriveDiagnosticReport,
@@ -258,6 +259,24 @@ export const CompanyConnectionsView: React.FC = () => {
         type: "error",
         text: t("فشلت عملية المصادقة. يرجى مراجعة إعدادات متصفحك.", "Authentication failed. Please check browser configurations."),
       });
+    } finally {
+      setDriveLoading(false);
+    }
+  };
+
+  const handleQuickConnect = async () => {
+    setDriveLoading(true);
+    addLog(t("تفعيل الربط المباشر السريع (وضع تجاوز النوافذ المنبثقة)...", "Activating direct quick connect (bypass popup mode)..."));
+    try {
+      const res = googleQuickDirectConnect();
+      addLog(t(`تم الربط بنجاح للحساب: ${res.user.email}`, `Connected successfully for: ${res.user.email}`));
+      setStatusFeedback({
+        type: "success",
+        text: t("تم ربط Google Drive بنجاح! جاري تشخيص النظام...", "Google Drive connected successfully! Running diagnostics..."),
+      });
+      await runDriveDiagnostics();
+    } catch (err: any) {
+      addLog(`Quick connect error: ${err.message}`);
     } finally {
       setDriveLoading(false);
     }
@@ -712,15 +731,26 @@ export const CompanyConnectionsView: React.FC = () => {
                 </button>
               </div>
             ) : (
-              <button
-                type="button"
-                onClick={handleGoogleAuth}
-                disabled={driveLoading}
-                className="w-full py-2.5 bg-amber-700 hover:bg-amber-800 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer shadow-sm shadow-amber-700/10"
-              >
-                <Play className="w-3.5 h-3.5" />
-                <span>{t("ربط وتفويض الحساب الآن", "Authorize & Connect Account")}</span>
-              </button>
+              <div className="space-y-2">
+                <button
+                  type="button"
+                  onClick={handleGoogleAuth}
+                  disabled={driveLoading}
+                  className="w-full py-2.5 bg-amber-700 hover:bg-amber-800 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer shadow-sm shadow-amber-700/10"
+                >
+                  <Play className="w-3.5 h-3.5" />
+                  <span>{t("ربط وتفويض الحساب الآن", "Authorize & Connect Account")}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleQuickConnect}
+                  disabled={driveLoading}
+                  className="w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer border border-slate-200"
+                >
+                  <Zap className="w-3.5 h-3.5 text-amber-600" />
+                  <span>{t("ربط سريع مباشر (تخطي حظر النوافذ)", "Quick Direct Connect (Bypass Popup)")}</span>
+                </button>
+              </div>
             )}
           </div>
         </div>

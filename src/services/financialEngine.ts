@@ -1076,6 +1076,7 @@ export function generateOwnerStatement(
     adjustments: FinancialAdjustmentRecord[];
     reversals: FinancialReversalRecord[];
     leases?: Lease[];
+    tenants?: Tenant[];
   }
 ): OwnerStatementReport {
   const reversedCollectionIds = new Set(
@@ -1092,10 +1093,18 @@ export function generateOwnerStatement(
     propertyName?: string;
     unitNumber?: string;
     leaseNumber?: string;
+    tenantName?: string;
     debit: number;
     credit: number;
     sourceEntityId?: string;
   }> = [];
+
+  // Helper to find tenant name
+  const getTenantNameFromId = (tid?: string) => {
+    if (!tid || !data.tenants) return undefined;
+    const t = data.tenants.find(t => t.id === tid);
+    return t ? (t.nameAr || t.nameEn) : undefined;
+  };
 
   // A. Rent Collections -> CREDIT (Increases Owner Payable)
   for (const col of (data.collections || [])) {
@@ -1117,6 +1126,7 @@ export function generateOwnerStatement(
       propertyName: (col as any).propertyNameAr,
       unitNumber: (col as any).unitNumber,
       leaseNumber: (col as any).leaseNumber,
+      tenantName: col.payerName || getTenantNameFromId((col as any).tenantId),
       debit: 0,
       credit: rentAmount,
       sourceEntityId: colId,
@@ -1128,6 +1138,12 @@ export function generateOwnerStatement(
     if (!com || com.ownerId !== ownerId || com.partyType !== "OWNER" || com.status === "CANCELLED") continue;
     if (filters.propertyId && com.propertyId && com.propertyId !== filters.propertyId) continue;
 
+    let tName;
+    if (data.leases && com.leaseId) {
+      const lease = data.leases.find(l => l.id === com.leaseId);
+      if (lease) tName = getTenantNameFromId(lease.tenantId);
+    }
+
     const comId = com.id || "com";
     const createdDate = com.createdAt ? com.createdAt.slice(0, 10) : new Date().toISOString().slice(0, 10);
     rawItems.push({
@@ -1137,6 +1153,7 @@ export function generateOwnerStatement(
       eventType: "OWNER_COMMISSION_DEDUCTION",
       description: `استقطاع رسوم إدارية وتأجير (${com.ratePercentage || 5}%)` + (com.vatAmount ? ` (شامل ضريبة القيمة المضافة 5%)` : "") + ` - عقد ${com.leaseId}`,
       propertyId: com.propertyId,
+      tenantName: tName,
       debit: com.totalCommissionAmount,
       credit: 0,
       sourceEntityId: comId,
@@ -1148,6 +1165,12 @@ export function generateOwnerStatement(
     if (!exp || exp.ownerId !== ownerId || exp.costBearer !== "OWNER" || exp.status === "CANCELLED" || exp.status === "REVERSED") continue;
     if (filters.propertyId && exp.propertyId && exp.propertyId !== filters.propertyId) continue;
 
+    let tName;
+    if (data.leases && exp.unitId) {
+      const lease = data.leases.find(l => l.unitId === exp.unitId && l.contractStatus === "ACTIVE");
+      if (lease) tName = getTenantNameFromId(lease.tenantId);
+    }
+
     const expId = exp.id || "exp";
     const createdDate = exp.createdAt ? exp.createdAt.slice(0, 10) : new Date().toISOString().slice(0, 10);
     rawItems.push({
@@ -1158,6 +1181,7 @@ export function generateOwnerStatement(
       description: `مصروف عقار: ${exp.description} (${exp.category})`,
       propertyId: exp.propertyId,
       unitNumber: exp.unitId,
+      tenantName: tName,
       debit: exp.totalAmount,
       credit: 0,
       sourceEntityId: expId,

@@ -126,11 +126,11 @@ export const UnifiedCommunicationCenter: React.FC = () => {
         direction: "OUTBOUND",
         channel: selectedChannel,
         senderId: currentUser?.id || "STAFF",
-        senderName: currentUser?.name || "Falcon Admin",
+        senderName: currentUser?.nameAr || currentUser?.nameEn || "Falcon Admin",
         recipientId: selectedTargetId,
         recipientName: recipientName || "Client",
-        recipientPhone: recipientPhone || undefined,
-        recipientEmail: recipientEmail || undefined,
+        recipient: recipientPhone || recipientEmail || "Client",
+        status: "DELIVERED",
         subject: subject.trim() || (language === "ar" ? "إشعار صقر الإمارات" : "Falcon Real Estate Notice"),
         body: messageBody.trim(),
         category: targetType === "OWNER" ? "OWNER_NOTICE" : "TENANT_NOTICE",
@@ -138,6 +138,10 @@ export const UnifiedCommunicationCenter: React.FC = () => {
         sentAt: new Date().toISOString(),
         relatedEntityType: targetType,
         relatedEntityId: selectedTargetId,
+        metadata: {
+          phone: recipientPhone || undefined,
+          email: recipientEmail || undefined,
+        },
       });
 
       setSuccessToast(

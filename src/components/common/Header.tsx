@@ -35,6 +35,8 @@ export const Header: React.FC<HeaderProps> = ({
   const [isRemixAndShareOpen, setIsRemixAndShareOpen] = useState(false);
 
   const isTenantMode = loginMode === "TENANT";
+  const isPortalMode = loginMode === "TENANT" || loginMode === "OWNER" || currentUser?.role === "TENANT" || currentUser?.role === "OWNER" || currentUser?.role === "PROPERTY_OWNER";
+  
   const bouncedCount = cheques.filter((c) => isBouncedWithoutLegalAction(c, cases)).length;
   const activeCasesCount = cases.filter((c) => {
     const s = (c.status || "").toUpperCase().trim();
@@ -47,7 +49,7 @@ export const Header: React.FC<HeaderProps> = ({
       m.status !== "CANCELLED" &&
       m.status !== "REJECTED"
   ).length;
-  const totalAlerts = bouncedCount + activeCasesCount + urgentMaintCount;
+  const totalAlerts = isPortalMode ? 0 : (bouncedCount + activeCasesCount + urgentMaintCount);
 
   const logoSrc = companyProfile.logoUrl || companyProfile.logoBase64 || companyProfile.logo;
   const companyName = language === "ar" 
@@ -88,7 +90,7 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
 
         {/* Center: Quick Search Bar */}
-        {!isTenantMode && (
+        {!isPortalMode && (
           <div className="hidden md:flex flex-1 max-w-md mx-4">
             <button
               onClick={onOpenGlobalSearch}
@@ -138,7 +140,7 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
 
           {/* Notifications Trigger */}
-          {!isTenantMode && (
+          {!isPortalMode && (
             <button
               onClick={onOpenNotifications}
               className="relative p-2 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition-colors cursor-pointer"

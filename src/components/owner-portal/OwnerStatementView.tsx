@@ -85,7 +85,7 @@ export const OwnerStatementView: React.FC<OwnerStatementViewProps> = ({
 
   const handleExportCSV = () => {
     const headers = ["Date", "Reference", "Description", "Debit (AED)", "Credit (AED)", "Running Balance (AED)"];
-    const rows = statementReport.items.map((item) => [
+    const rows = statementReport.transactions.map((item) => [
       item.date,
       item.reference,
       `"${item.description.replace(/"/g, '""')}"`,
@@ -199,7 +199,7 @@ export const OwnerStatementView: React.FC<OwnerStatementViewProps> = ({
                 {language === "ar" ? "قسم الحسابات وإدارة العقارات" : "Accounts & Property Management Division"}
               </p>
               <div className="text-[11px] font-mono text-slate-400 mt-0.5">
-                TRN: {companyProfile.trn || "100234567800003"}
+                TRN: {companyProfile.vatTrn || "100234567800003"}
               </div>
             </div>
           </div>
@@ -249,15 +249,21 @@ export const OwnerStatementView: React.FC<OwnerStatementViewProps> = ({
           </div>
           <div>
             <div className="text-[10px] text-emerald-400 font-bold uppercase">{language === "ar" ? "إجمالي التحصيلات (+)" : "Collections (+)"}</div>
-            <div className="text-sm font-black text-emerald-300 mt-0.5">{formatAED(statementReport.totalCredit)}</div>
+            <div className="text-sm font-black text-emerald-300 mt-0.5">{formatAED(statementReport.totalCredits)}</div>
           </div>
           <div>
             <div className="text-[10px] text-rose-400 font-bold uppercase">{language === "ar" ? "إجمالي الاستقطاعات (-)" : "Deductions (-)"}</div>
-            <div className="text-sm font-black text-rose-300 mt-0.5">{formatAED(statementReport.totalDebit)}</div>
+            <div className="text-sm font-black text-rose-300 mt-0.5">{formatAED(statementReport.totalDebits)}</div>
           </div>
           <div>
             <div className="text-[10px] text-amber-400 font-bold uppercase">{language === "ar" ? "التحويلات المسددة" : "Transfers Paid"}</div>
-            <div className="text-sm font-black text-amber-300 mt-0.5">{formatAED(statementReport.totalTransfersPaid)}</div>
+            <div className="text-sm font-black text-amber-300 mt-0.5">
+              {formatAED(
+                statementReport.transactions
+                  .filter((t) => t.eventType === "OWNER_TRANSFER")
+                  .reduce((s, t) => s + (t.debit || 0), 0)
+              )}
+            </div>
           </div>
           <div>
             <div className="text-[10px] text-amber-200 font-black uppercase">{language === "ar" ? "صافي الرصيد الختامي" : "Closing Payable"}</div>
@@ -279,22 +285,24 @@ export const OwnerStatementView: React.FC<OwnerStatementViewProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200">
-              {statementReport.items.length === 0 ? (
+              {statementReport.transactions.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="py-8 text-center text-slate-400">
                     {language === "ar" ? "لا توجد معاملات مسجلة خلال الفترة المحددة" : "No transactions recorded during this period"}
                   </td>
                 </tr>
               ) : (
-                statementReport.items.map((item, idx) => (
+                statementReport.transactions.map((item, idx) => (
                   <tr key={item.id || idx} className="hover:bg-slate-50/70 transition-colors">
                     <td className="py-2.5 px-3 font-mono text-slate-600 whitespace-nowrap">{item.date}</td>
                     <td className="py-2.5 px-3 font-mono font-bold text-slate-800 whitespace-nowrap">{item.reference}</td>
                     <td className="py-2.5 px-3 text-slate-800 font-medium">
                       <div>{item.description}</div>
-                      {item.propertyName && (
-                        <div className="text-[10px] text-slate-400 mt-0.5">
-                          {item.propertyName} {item.unitNumber ? `• ${language === "ar" ? "وحدة" : "Unit"} ${item.unitNumber}` : ""}
+                      {(item.propertyName || item.tenantName) && (
+                        <div className="text-[10px] text-slate-400 mt-0.5 space-x-1 rtl:space-x-reverse">
+                          {item.propertyName && <span>{item.propertyName}</span>}
+                          {item.unitNumber && <span>• {language === "ar" ? "وحدة" : "Unit"} {item.unitNumber}</span>}
+                          {item.tenantName && <span className="text-indigo-600/80 font-bold">• {item.tenantName}</span>}
                         </div>
                       )}
                     </td>

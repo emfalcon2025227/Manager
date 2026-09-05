@@ -64,6 +64,13 @@ export interface UserPermissionOverride {
   auditId?: string;
 }
 
+export type PortalAccountStatus =
+  | "NOT_PROVISIONED"
+  | "PENDING_ACTIVATION"
+  | "ACTIVE"
+  | "PASSWORD_CHANGE_REQUIRED"
+  | "SUSPENDED";
+
 export interface User {
   id: string;
   username: string;
@@ -80,6 +87,9 @@ export interface User {
   createdAt: string;
   lastLogin?: string;
   password?: string;
+  mustChangePassword?: boolean;
+  isFirstLoginCompleted?: boolean;
+  portalAccountStatus?: PortalAccountStatus;
 }
 
 export interface CompanyLetterheadTemplate {
@@ -929,6 +939,7 @@ export interface MaintenanceRequest {
   tenantPhone?: string;
   leaseId?: string;
   leaseNumber?: string;
+  tenantName?: string;
   category: string;
   priority: MaintenancePriority;
   status: MaintenanceStatus;
@@ -1037,21 +1048,28 @@ export interface MessageTemplate {
   variables: string[];
 }
 
+export type NotificationScope = "INTERNAL_ONLY" | "PORTAL_APPROVED" | "PUBLIC";
+
 export interface NotificationRecord {
   id: string;
-  channel: "WHATSAPP" | "EMAIL" | "SMS" | "PORTAL";
+  channel: "WHATSAPP" | "EMAIL" | "SMS" | "PORTAL" | string;
   type?: any;
   recipient: string;
   recipientName: string;
+  recipientPhone?: string;
   tenantId?: string;
+  ownerId?: string;
   chequeId?: string;
   caseId?: string;
-  status: "SENT" | "FAILED" | "PENDING" | "DELIVERED";
+  status: "SENT" | "FAILED" | "PENDING" | "DELIVERED" | string;
   sentAt?: string;
   content: string;
+  message?: string;
   responsePayload?: string;
   attemptCount?: number;
   createdAt: string;
+  scope?: NotificationScope;
+  isPortalVisible?: boolean;
 }
 
 export type NotificationLog = NotificationRecord;
@@ -1727,6 +1745,7 @@ export interface OwnerStatementItem {
   propertyName?: string;
   unitNumber?: string;
   leaseNumber?: string;
+  tenantName?: string;
   debit: number; // Reductions to Owner Payable (Transfers, Commissions, Expenses)
   credit: number; // Additions to Owner Payable (Rent Collections)
   runningBalance: number;
@@ -1770,6 +1789,7 @@ export interface TenantStatementItem {
   propertyName?: string;
   unitNumber?: string;
   leaseNumber?: string;
+  tenantName?: string;
   debit: number; // Charges/Obligations (Rent, Commission, Bounced Cheque fees)
   credit: number; // Payments (Collections, Settled Allocations)
   runningBalance: number;
@@ -1925,17 +1945,25 @@ export type OperationalCommunicationChannel =
   | "MANUAL"
   | "PHONE"
   | "VISIT"
-  | "NOTE";
+  | "NOTE"
+  | "PORTAL_MESSAGE"
+  | "SMS";
+
+export type CommunicationScope = "INTERNAL_ONLY" | "PORTAL_APPROVED" | "PUBLIC";
 
 export interface OperationalCommunicationRecord {
   id: string;
-  communicationNumber: string;
-  timestamp: string;
-  channel: OperationalCommunicationChannel;
+  communicationNumber?: string;
+  timestamp?: string;
+  channel: OperationalCommunicationChannel | string;
   direction: "INBOUND" | "OUTBOUND" | "INTERNAL";
   
-  sender: string;
-  recipient: string;
+  sender?: string;
+  recipient?: string;
+  senderId?: string;
+  senderName?: string;
+  recipientId?: string;
+  recipientName?: string;
   
   // Relationships
   ownerId?: string;
@@ -1946,13 +1974,25 @@ export interface OperationalCommunicationRecord {
   caseId?: string;
   
   subject: string;
-  messageSummary: string;
-  status: "SENT" | "DELIVERED" | "READ" | "FAILED" | "LOGGED";
+  messageSummary?: string;
+  body?: string;
+  category?: string;
+  deliveryStatus?: string;
+  status: "SENT" | "DELIVERED" | "READ" | "FAILED" | "LOGGED" | string;
   reference?: string;
-  userId: string;
+  userId?: string;
   userName?: string;
   attachments?: string[];
+  scope?: CommunicationScope;
+  isPortalVisible?: boolean;
+  sentAt?: string;
+  createdAt?: string;
+  relatedEntityType?: string;
+  relatedEntityId?: string;
+  metadata?: any;
 }
+
+export type OperationalCommunication = OperationalCommunicationRecord;
 
 export interface DocumentChecklistItem {
   id: string;

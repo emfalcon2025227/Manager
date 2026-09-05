@@ -13,7 +13,8 @@ import {
   X,
   Save,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  RefreshCw
 } from "lucide-react";
 import { useLanguage } from "../../context/LanguageContext";
 import { useAuth } from "../../context/AuthContext";
@@ -24,7 +25,7 @@ import { SearchableSelect, SearchableOption } from "../common/SearchableSelect";
 
 export const TenantAccountsSettings: React.FC = () => {
   const { language } = useLanguage();
-  const { users, createUser, updateUser, deleteUser, resetUserPassword } = useAuth();
+  const { users, createUser, updateUser, deleteUser, resetUserPassword, syncPortalAccounts } = useAuth();
   const { tenants, properties, units, owners, leases } = useData();
 
   const [searchTerm, setSearchTerm] = useState("");
@@ -194,13 +195,31 @@ export const TenantAccountsSettings: React.FC = () => {
             className="w-full pr-10 pl-4 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-amber-500/20 focus:border-amber-600 outline-none transition-all"
           />
         </div>
-        <button
-          onClick={() => handleOpenModal()}
-          className="w-full sm:w-auto px-5 py-2.5 bg-amber-700 hover:bg-amber-800 text-white rounded-xl text-xs font-bold shadow-md shadow-amber-900/10 flex items-center justify-center gap-2 transition-all cursor-pointer"
-        >
-          <UserPlus className="w-4 h-4" />
-          <span>{language === "ar" ? "إنشاء حساب جديد" : "Create New Account"}</span>
-        </button>
+        <div className="flex items-center gap-2 w-full sm:w-auto">
+          <button
+            onClick={() => {
+              const count = syncPortalAccounts(owners, tenants);
+              setSuccess(
+                count > 0
+                  ? (language === "ar" ? `تمت المزامنة: تم إنشاء ${count} حسابات بوابة جديدة للمستأجرين` : `Sync complete: Created ${count} new tenant portal accounts`)
+                  : (language === "ar" ? "جميع المستأجرين المؤهلين لديهم حسابات بوابات مسبقاً" : "All eligible tenants already have portal accounts")
+              );
+              setTimeout(() => setSuccess(null), 4000);
+            }}
+            className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer"
+          >
+            <RefreshCw className="w-4 h-4 text-slate-500" />
+            <span>{language === "ar" ? "مزامنة حسابات المستأجرين تلقائياً" : "Auto-Sync Tenant Portals"}</span>
+          </button>
+
+          <button
+            onClick={() => handleOpenModal()}
+            className="px-5 py-2.5 bg-amber-700 hover:bg-amber-800 text-white rounded-xl text-xs font-bold shadow-md shadow-amber-900/10 flex items-center justify-center gap-2 transition-all cursor-pointer shrink-0"
+          >
+            <UserPlus className="w-4 h-4" />
+            <span>{language === "ar" ? "إنشاء حساب جديد" : "Create New Account"}</span>
+          </button>
+        </div>
       </div>
 
       {success && (

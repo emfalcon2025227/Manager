@@ -37,6 +37,7 @@ export const OwnerPortalView: React.FC = () => {
     tenants,
     maintenanceRequests,
     companyProfile,
+    isDataLoaded
   } = useData();
 
   const [activeTab, setActiveTab] = useState<
@@ -93,6 +94,17 @@ export const OwnerPortalView: React.FC = () => {
   const ownerMaintenance = useMemo(() => {
     return maintenanceRequests.filter((m) => ownerUnitIds.has(m.unitId));
   }, [maintenanceRequests, ownerUnitIds]);
+
+  if (!isDataLoaded) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-12 h-12 rounded-full border-4 border-slate-200 border-t-amber-600 animate-spin"></div>
+          <p className="text-slate-500 font-bold">{language === "ar" ? "جاري مزامنة البيانات..." : "Syncing data..."}</p>
+        </div>
+      </div>
+    );
+  }
 
   if (!currentOwner) {
     return (

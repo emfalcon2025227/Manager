@@ -34,6 +34,7 @@ import { MaintenanceView } from "./components/maintenance/MaintenanceView";
 import { CollectionCenter } from "./components/collections/CollectionCenter";
 import { PendingAdministrativeFeeAlert } from "./components/collections/PendingAdministrativeFeeAlert";
 import { TenantPortalView } from "./components/portal/TenantPortalView";
+import { ForcePasswordChangeModal } from "./components/auth/ForcePasswordChangeModal";
 import { PropertyOperationsDashboard } from "./components/master/PropertyOperationsDashboard";
 import { DocumentControlCenter } from "./components/documents/DocumentControlCenter";
 import { OperationalTaskCenter } from "./components/master/OperationalTaskCenter";
@@ -109,10 +110,18 @@ const MainAppContent: React.FC = () => {
   }, [isAuthenticated, loginMode, isOwnerMode, currentUser?.id]);
 
   // Global Cross-View Modal Triggers
-  const { collections, tenants, cheques, isQuotaExceeded, companyProfile } = useData();
+  const { collections, tenants, cheques, isQuotaExceeded, companyProfile, owners } = useData();
+  const { syncPortalAccounts } = useAuth();
   const [collectionCheque, setCollectionCheque] = useState<Cheque | null>(null);
   const [issuedReceipt, setIssuedReceipt] = useState<CollectionRecord | null>(null);
   const [convertCaseChequeIds, setConvertCaseChequeIds] = useState<string[]>([]);
+
+  // Automatic Owner & Tenant Portal Account Provisioning & Synchronization
+  useEffect(() => {
+    if (owners.length > 0 || tenants.length > 0) {
+      syncPortalAccounts(owners, tenants);
+    }
+  }, [owners, tenants]);
 
   // Manager Floating Approval Toast Notification State
   const [managerFloatingToast, setManagerFloatingToast] = useState<{
@@ -277,9 +286,11 @@ const MainAppContent: React.FC = () => {
         onOpenGlobalSearch={() => setCurrentView("CHEQUE_OPERATIONS")}
       />
 
-      <div className="shrink-0 print:hidden">
-        <PendingAdministrativeFeeAlert />
-      </div>
+      {!isTenantMode && !isOwnerMode && currentView !== "TENANT_PORTAL" && currentView !== "OWNER_PORTAL" && (
+        <div className="shrink-0 print:hidden">
+          <PendingAdministrativeFeeAlert />
+        </div>
+      )}
 
       {isQuotaExceeded && !isQuotaDismissed && (
         <div className="bg-amber-50 border-y border-amber-200 py-3 px-4 sm:px-6 lg:px-8 shrink-0 print:hidden">
@@ -615,6 +626,9 @@ const MainAppContent: React.FC = () => {
 
       {/* Live Report Designer */}
       <ReportDesignerFloatingPanel />
+
+      {/* Force Password Change Modal for Portal First-time logins */}
+      <ForcePasswordChangeModal />
     </div>
   );
 };
