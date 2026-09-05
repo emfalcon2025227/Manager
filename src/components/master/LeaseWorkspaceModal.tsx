@@ -217,6 +217,13 @@ export const LeaseWorkspacePage: React.FC<LeaseWorkspaceModalProps> = ({ lease: 
     return commissions.filter((c) => c.leaseId === lease.id && c.outstandingBalance > 0);
   }, [commissions, lease.id]);
 
+  const allLeaseAdminFees = useMemo(() => {
+    if (!lease) return [];
+    return commissions.filter(
+      (c) => c.leaseId === lease.id && c.commissionType === "ADMIN_FEE" && c.status !== "CANCELLED" && c.status !== "REVERSED"
+    );
+  }, [commissions, lease.id]);
+
   const handleAddAllocation = (
     targetType: PaymentAllocationTargetType,
     targetId: string,
@@ -2001,9 +2008,10 @@ export const LeaseWorkspacePage: React.FC<LeaseWorkspaceModalProps> = ({ lease: 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               {/* OWNER COMMISSION */}
               {(() => {
-                const ownerComm = leaseCommissions.find(
-                  (c) => c.partyType === "OWNER" && String(c.contractualCommissionYear || currentCommissionYear) === String(currentCommissionYear) && (c.id || 0) === renewalSeq && c.status !== "CANCELLED"
+                const ownerComm = allLeaseAdminFees.find(
+                  (c) => c.partyType === "OWNER" && (String(c.contractualCommissionYear || "") === String(currentCommissionYear) || (c.renewalSequence || 1) === renewalSeq)
                 );
+                const isPaidOrSettled = ownerComm?.status === "FULLY_COLLECTED" || ownerComm?.status === "COLLECTED";
                 return (
                   <div className="p-5 rounded-2xl border border-slate-200 bg-slate-50 space-y-4 shadow-2xs">
                     <div className="flex items-center justify-between">
@@ -2011,8 +2019,8 @@ export const LeaseWorkspacePage: React.FC<LeaseWorkspaceModalProps> = ({ lease: 
                         <Building className="w-4 h-4 text-amber-700" />
                         <h5 className="text-xs font-black text-slate-900">{isAr ? "الرسوم الإدارية للمالك (Owner Admin Fees)" : "Owner Administrative Fees"}</h5>
                       </div>
-                      <Badge variant={ownerComm ? "success" : "neutral"} size="sm">
-                        {ownerComm ? (isAr ? "تم تسجيلها" : "Charged") : (isAr ? "غير مسجلة" : "Not Charged")}
+                      <Badge variant={isPaidOrSettled ? "success" : ownerComm ? "warning" : "neutral"} size="sm">
+                        {isPaidOrSettled ? (isAr ? "مسددة (PAID)" : "Paid / Settled") : ownerComm ? (isAr ? ownerComm.status : ownerComm.status) : (isAr ? "غير مسجلة" : "Not Charged")}
                       </Badge>
                     </div>
 
@@ -2042,9 +2050,10 @@ export const LeaseWorkspacePage: React.FC<LeaseWorkspaceModalProps> = ({ lease: 
 
               {/* TENANT COMMISSION */}
               {(() => {
-                const tenantComm = leaseCommissions.find(
-                  (c) => c.partyType === "TENANT" && String(c.contractualCommissionYear || currentCommissionYear) === String(currentCommissionYear) && (c.id || 0) === renewalSeq && c.status !== "CANCELLED"
+                const tenantComm = allLeaseAdminFees.find(
+                  (c) => c.partyType === "TENANT" && (String(c.contractualCommissionYear || "") === String(currentCommissionYear) || (c.renewalSequence || 1) === renewalSeq)
                 );
+                const isPaidOrSettled = tenantComm?.status === "FULLY_COLLECTED" || tenantComm?.status === "COLLECTED";
                 return (
                   <div className="p-5 rounded-2xl border border-slate-200 bg-slate-50 space-y-4 shadow-2xs">
                     <div className="flex items-center justify-between">
@@ -2052,8 +2061,8 @@ export const LeaseWorkspacePage: React.FC<LeaseWorkspaceModalProps> = ({ lease: 
                         <User className="w-4 h-4 text-amber-700" />
                         <h5 className="text-xs font-black text-slate-900">{isAr ? "الرسوم الإدارية للمستأجر (Tenant Admin Fees)" : "Tenant Administrative Fees"}</h5>
                       </div>
-                      <Badge variant={tenantComm ? "success" : "neutral"} size="sm">
-                        {tenantComm ? (isAr ? "تم تسجيلها" : "Charged") : (isAr ? "غير مسجلة" : "Not Charged")}
+                      <Badge variant={isPaidOrSettled ? "success" : tenantComm ? "warning" : "neutral"} size="sm">
+                        {isPaidOrSettled ? (isAr ? "مسددة (PAID)" : "Paid / Settled") : tenantComm ? (isAr ? tenantComm.status : tenantComm.status) : (isAr ? "غير مسجلة" : "Not Charged")}
                       </Badge>
                     </div>
 
