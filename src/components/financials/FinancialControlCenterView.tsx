@@ -61,27 +61,6 @@ import {
   AdminFeeExceptionType,
 } from "../../utils/feeExceptionDetector";
 import { downloadElementAsPdf } from "../../utils/pdfExportUtils";
-import { 
-  runPhase49FinancialClosingTests, 
-  P49TestResult, 
-  P49TestReport 
-} from "../../utils/phase49FinancialClosingTests";
-import { 
-  runPhase50PeriodReconciliationTests, 
-  P50TestReport 
-} from "../../utils/phase50PeriodReconciliationTests";
-import { 
-  runPhase51ContinuousFinancialControlTests, 
-  P51TestReport,
-  P51TestResult
-} from "../../utils/phase51ContinuousFinancialControlTests";
-import { 
-  runPhase52DailyDepositsForensicTests,
-  P52TestReport
-} from "../../utils/phase52DailyDepositsForensicTests";
-import { 
-  runPhase53DailyRevenueCollectionTests 
-} from "../../utils/phase53DailyRevenueCollectionTests";
 import {
   evaluateContinuousFinancialControl,
   createContinuousControlSnapshot,

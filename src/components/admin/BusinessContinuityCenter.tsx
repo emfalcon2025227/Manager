@@ -12,7 +12,6 @@ import { useLanguage } from "../../context/LanguageContext";
 import { useData } from "../../context/DataContext";
 import { getBackupHistory, getLatestBackup, getBackupFreshnessStatus } from "../../utils/productionBackupHealth";
 import { evaluateRecoveryReadiness } from "../../utils/productionRecoveryReadiness";
-import { runDRSimulation } from "../../utils/disasterRecoverySimulator";
 import { getFinancialFailSafeState, setFinancialFailSafeState } from "../../utils/financialFailSafe";
 import { runRecoveryFinancialWatchdog } from "../../utils/recoveryFinancialIntegrityWatchdog";
 import { getContinuityConfig } from "../../utils/businessContinuityConfiguration";

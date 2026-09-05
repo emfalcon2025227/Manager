@@ -11,8 +11,6 @@ import {
 import { useLanguage } from "../../context/LanguageContext";
 import { useData } from "../../context/DataContext";
 import { useAuth } from "../../context/AuthContext";
-import { runPhase45FinancialImmutabilityTests } from "../../utils/phase45FinancialImmutabilityTests";
-import { runPhase46JudicialCollectionTests } from "../../utils/phase46JudicialCollectionTests";
 
 interface UATScenario {
   id: string;

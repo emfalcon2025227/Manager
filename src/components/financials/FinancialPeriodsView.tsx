@@ -27,7 +27,6 @@ import { useAuth } from "../../context/AuthContext";
 import { FinancialPeriod } from "../../types";
 import { motion, AnimatePresence } from "motion/react";
 import { PeriodReconciliationModal } from "./PeriodReconciliationModal";
-import { runPhase50PeriodReconciliationTests, P50TestReport } from "../../utils/phase50PeriodReconciliationTests";
 
 export const FinancialPeriodsView: React.FC = () => {
   const { language } = useLanguage();

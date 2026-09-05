@@ -266,7 +266,7 @@ export const BatchChequeOcrModal: React.FC<BatchChequeOcrModalProps> = ({
     chq: StagedBatchCheque,
     allBatch: StagedBatchCheque[]
   ): { status: StagedBatchCheque["validationStatus"]; notes?: string; duplicateLevel: StagedBatchCheque["duplicateLevel"] } => {
-    const fakeProcessed: ProcessedDocumentItem = {
+    const mappedItem: ProcessedDocumentItem = {
       temporaryId: chq.temporaryId || chq.id,
       sequence: chq.installmentIndex || 1,
       sourceFileName: chq.sourcePdfFileName || "cheque.jpg",
@@ -317,7 +317,7 @@ export const BatchChequeOcrModal: React.FC<BatchChequeOcrModalProps> = ({
       }));
 
     const targetSlot = targetInstallments.find((t) => t.id === chq.installmentId);
-    return validateChequeItem(fakeProcessed, otherItems, cheques, targetSlot);
+    return validateChequeItem(mappedItem, otherItems, cheques, targetSlot);
   };
 
   // Handle Multi-file, Multi-page PDF, or Multi-cheque Upload

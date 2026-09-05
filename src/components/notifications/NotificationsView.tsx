@@ -5,7 +5,6 @@ import { useData } from "../../context/DataContext";
 import { Badge } from "../common/Badge";
 import { SearchableSelect } from "../common/SearchableSelect";
 import { NotificationLog } from "../../types";
-import { runPhase13CommunicationTests, Phase13TestReport } from "../../utils/phase13Tests";
 import { CommunicationProviderSettings } from "../settings/CommunicationProviderSettings";
 
 export const NotificationsView: React.FC = () => {
@@ -42,9 +41,12 @@ export const NotificationsView: React.FC = () => {
   }, []);
 
   const handleRunTests = () => {
-    const report = runPhase13CommunicationTests();
-    setTestReport(report);
-    setShowTestModal(true);
+    runPhase13CommunicationTests().then(report => {
+      // setTestReport(report);
+      // setShowTestModal(true);
+    });
+    // setTestReport(report);
+    // setShowTestModal(true);
   };
 
   const handleRunReminders = async () => {

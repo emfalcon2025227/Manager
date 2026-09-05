@@ -37,8 +37,6 @@ import { LegalEscalationView } from "./LegalEscalationView";
 import { CollectionHistoryView } from "./CollectionHistoryView";
 import { CollectionsView } from "./CollectionsView";
 import { RecordPaymentModal } from "./RecordPaymentModal";
-import { runPhase19CollectionTests } from "../../utils/phase19CollectionTests";
-import { runPhase54EndToEndFinancialReconciliationTests } from "../../utils/phase54EndToEndFinancialReconciliationTests";
 import { Cheque } from "../../types";
 import { OfficePrintHeader } from "../common/OfficePrintHeader";
 

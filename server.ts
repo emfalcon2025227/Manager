@@ -1742,12 +1742,16 @@ app.post("/api/ocr/extract-cheque-batch", async (req, res) => {
         }
       }
 
+      if (allExtractedCheques.length === 0) {
+        return res.status(400).json({ success: false, error: "No cheques detected" });
+      }
+
       return res.json({
         success: true,
         data: {
           totalChequesDetected: allExtractedCheques.length,
           cheques: allExtractedCheques,
-          confidence: 0.95
+          confidence: undefined
         },
         source: ai ? "Gemini Vision (Multi-Image Batch)" : "Local OCR Fallback"
       });
@@ -1796,15 +1800,22 @@ app.post("/api/ocr/extract-cheque-batch", async (req, res) => {
     }
 
     const localData = await runLocalTesseractOcr(cleanBase64, "CHEQUE");
-    return res.json({
-      success: true,
-      data: {
-        totalChequesDetected: 1,
-        cheques: [localData],
-        confidence: 0.7
-      },
-      source: "Local Forensic OCR Engine"
-    });
+    let hasData = false;
+    if (localData.chequeNumber || localData.amountNumeric || localData.bankName) hasData = true;
+
+    if (hasData) {
+      return res.json({
+        success: true,
+        data: {
+          totalChequesDetected: 1,
+          cheques: [localData],
+          confidence: undefined
+        },
+        source: "Local Forensic OCR Engine"
+      });
+    }
+
+    return res.status(400).json({ success: false, error: "No cheques detected" });
   } catch (error: any) {
     console.error("[OCR BATCH] Unexpected error:", error);
     return res.status(500).json({
@@ -2866,11 +2877,11 @@ app.post("/api/notifications/dispatch-portal-access", async (req, res) => {
 
       await transporter.sendMail(mailOptions);
       console.log(`[Portal Provisioning] Access email dispatched to ${recipient}`);
+      return res.json({ success: true, status: "DISPATCHED", recipient });
     } else {
-      console.log(`[Portal Provisioning] (Mock) Access email intended for ${recipient} via SMTP. SMTP not configured.`);
+      console.log(`[Portal Provisioning] Access email failed for ${recipient}. SMTP not configured.`);
+      return res.status(400).json({ success: false, status: "FAILED", error: "SMTP_NOT_CONFIGURED" });
     }
-
-    return res.json({ success: true, status: "DISPATCHED", recipient });
   } catch (err: any) {
     console.error("[Portal Provisioning] Email dispatch error:", err);
     return res.status(500).json({ success: false, error: err?.message || "Failed to dispatch portal access email" });
@@ -2916,21 +2927,22 @@ app.post("/api/notifications/dispatch", async (req, res) => {
         };
         await transporter.sendMail(mailOptions);
         console.log(`[Notification Dispatcher] Email actually dispatched via SMTP to ${recipient}`);
+        return res.json({
+          success: true,
+          status: "DISPATCHED",
+          channel,
+          recipient,
+          previewMessage,
+          timestamp: new Date().toISOString(),
+        });
       } else {
-        console.log(`[Notification Dispatcher] (Mock) Sent EMAIL to ${recipient} (Missing SMTP_USER/SMTP_PASS env)`);
+        console.log(`[Notification Dispatcher] Email failed to ${recipient} (Missing SMTP_USER/SMTP_PASS env)`);
+        return res.status(400).json({ success: false, status: "FAILED", error: "SMTP_NOT_CONFIGURED" });
       }
     } else {
-      console.log(`[Notification Dispatcher] Sent [${channel.toUpperCase()}] to ${recipient}: Cheque #${chequeNumber} (AED ${amountAED})`);
+      console.log(`[Notification Dispatcher] Failed to send [${channel.toUpperCase()}] to ${recipient}: Channel not implemented.`);
+      return res.status(400).json({ success: false, status: "FAILED", error: "CHANNEL_NOT_SUPPORTED" });
     }
-
-    return res.json({
-      success: true,
-      status: "DISPATCHED",
-      channel,
-      recipient,
-      previewMessage,
-      timestamp: new Date().toISOString(),
-    });
   } catch (err: any) {
     console.error("[Notification Dispatch Error]:", err);
     return res.status(500).json({ success: false, error: err?.message || "Failed to dispatch notification" });
@@ -2952,15 +2964,47 @@ app.post("/api/notifications/dispatch-receipt", async (req, res) => {
       date,
     } = req.body;
 
-    const tenantName = tenantNameAr || tenantNameEn || payerName || "Valued Tenant";
-    console.log(`[Receipt Dispatcher] Sent collection receipt #${receiptNumber} (AED ${amount}) to ${recipient}`);
+    const configs = loadConfigs();
+    const secrets = loadSecrets();
+    const gmail = configs.gmail;
 
-    return res.json({
-      success: true,
-      message: `Official Payment Receipt #${receiptNumber} dispatched to ${recipient || tenantName}`,
-      receiptNumber,
-      timestamp: new Date().toISOString(),
-    });
+    if (gmail && gmail.smtpUser && secrets.smtpAppPassword) {
+      const transporter = nodemailer.createTransport({
+        host: gmail.smtpHost,
+        port: gmail.smtpPort,
+        secure: gmail.encryption === "SSL",
+        auth: {
+          user: gmail.smtpUser,
+          pass: secrets.smtpAppPassword,
+        },
+        tls: { rejectUnauthorized: true },
+      });
+
+      const tenantName = tenantNameAr || tenantNameEn || payerName || "Valued Tenant";
+      const subject = `سند قبض / Receipt - ${receiptNumber}`;
+      const messageBody = `عزيزي ${tenantName}، مرفق تفاصيل سند القبض رقم ${receiptNumber} بقيمة ${amount}.`;
+
+      const mailOptions = {
+        from: `"${gmail.senderName || 'Emirates Falcon'}" <${gmail.smtpUser}>`,
+        to: recipient,
+        subject: subject,
+        text: messageBody,
+      };
+
+      await transporter.sendMail(mailOptions);
+      console.log(`[Receipt Dispatcher] Sent collection receipt #${receiptNumber} (AED ${amount}) to ${recipient}`);
+
+      return res.json({
+        success: true,
+        status: "SENT",
+        message: `Official Payment Receipt #${receiptNumber} dispatched to ${recipient || tenantName}`,
+        receiptNumber,
+        timestamp: new Date().toISOString(),
+      });
+    } else {
+      console.log(`[Receipt Dispatcher] Failed to send collection receipt #${receiptNumber} to ${recipient}. SMTP not configured.`);
+      return res.status(400).json({ success: false, status: "FAILED", error: "SMTP_NOT_CONFIGURED" });
+    }
   } catch (err: any) {
     console.error("[Receipt Dispatch Error]:", err);
     return res.status(500).json({ success: false, error: err?.message || "Failed to dispatch receipt" });

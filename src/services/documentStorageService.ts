@@ -285,7 +285,7 @@ export class DocumentStorageService {
 
     let driveFileId = options.updateDriveFileId || params.existingItem?.driveFileId;
     let driveWebViewLink = params.existingItem?.driveWebViewLink;
-    let syncStatus: "SYNCED" | "PENDING_DRIVE_SYNC" | "REQUIRES_RETRY" = "PENDING_DRIVE_SYNC";
+    let syncStatus: "SYNCED" | "PENDING_DRIVE_SYNC" | "REQUIRES_RETRY" | "FAILED" = "PENDING_DRIVE_SYNC";
 
     // 2. Upload or Update in Google Drive if we have a token
     if (token) {
@@ -305,8 +305,9 @@ export class DocumentStorageService {
           syncStatus = "SYNCED";
           this.logAudit("DOCUMENT_UPDATE_SUCCEEDED", { driveFileId, operationKey });
         } else {
-          // If update failed, fallback to standard upload
-          syncStatus = "SYNCED"; // file exists remotely
+          // If update failed
+          syncStatus = "REQUIRES_RETRY"; 
+          this.logAudit("DOCUMENT_UPDATE_FAILED", { error: updateResult.error, operationKey });
         }
       } else {
         this.logAudit("DOCUMENT_UPLOAD_STARTED", { fileName, operationKey });
@@ -325,6 +326,7 @@ export class DocumentStorageService {
           syncStatus = "SYNCED";
           this.logAudit("DOCUMENT_UPLOAD_SUCCEEDED", { driveFileId, operationKey });
         } else {
+          syncStatus = "FAILED";
           this.logAudit("DOCUMENT_UPLOAD_FAILED", { error: driveResult.error, operationKey });
         }
       }

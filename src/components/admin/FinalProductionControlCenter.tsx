@@ -11,7 +11,6 @@ import {
 import { useLanguage } from "../../context/LanguageContext";
 import { useData } from "../../context/DataContext";
 import { useAuth } from "../../context/AuthContext";
-import { runPhase31FinalProductionGoLiveTests, Phase31TestReport } from "../../utils/phase31FinalProductionGoLiveTests";
 
 export const FinalProductionControlCenter: React.FC = () => {
   const { language } = useLanguage();

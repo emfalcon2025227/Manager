@@ -24,31 +24,14 @@ export interface NotificationRecordItem {
   idempotencyKey: string;
 }
 
-const IN_MEMORY_NOTIFICATIONS: NotificationRecordItem[] = [
-  {
-    id: "notif_demo_1",
-    notificationNumber: "REF-928371",
-    eventType: "PAYMENT_RECORDED",
-    channel: "WHATSAPP",
-    recipientType: "TENANT",
-    recipientId: "tenant_demo",
-    recipientName: "محمد أحمد (Mohammed Ahmed)",
-    recipientPhone: "+971501234567",
-    subject: "تأكيد استلام دفعة إيجارية",
-    messageBody: "مرحباً محمد أحمد، تم استلام دفعتكم بقيمة AED 25,000 بتاريخ 18/08/2026 بنجاح للعقد L-101.",
-    status: "DELIVERED",
-    attemptCount: 1,
-    createdAt: new Date().toISOString(),
-    idempotencyKey: "PAYMENT_RECORDED_PAY_1_tenant_demo_WHATSAPP_2026-08-18",
-  }
-];
+const IN_MEMORY_NOTIFICATIONS: NotificationRecordItem[] = [];
 
 export function generateIdempotencyKey(eventType: string, entityId: string, recipientId: string, channel: string): string {
   const today = new Date().toISOString().split("T")[0];
   return `${eventType}_${entityId}_${recipientId}_${channel}_${today}`;
 }
 
-export function sendNotification(params: {
+export async function sendNotification(params: {
   eventType: string;
   channel: "WHATSAPP" | "EMAIL" | "IN_APP";
   recipientType: "TENANT" | "OWNER" | "STAFF" | "MANAGEMENT";
@@ -59,11 +42,10 @@ export function sendNotification(params: {
   variables: Record<string, string | number>;
   entityId: string;
   language?: "ar" | "en";
-}): NotificationRecordItem {
+}): Promise<NotificationRecordItem> {
   const lang = params.language || "ar";
   const idempotencyKey = generateIdempotencyKey(params.eventType, params.entityId, params.recipientId, params.channel);
 
-  // Check duplicate prevention (idempotency)
   const existing = IN_MEMORY_NOTIFICATIONS.find((n) => n.idempotencyKey === idempotencyKey);
   if (existing) {
     return existing;
@@ -98,11 +80,40 @@ export function sendNotification(params: {
     recipientEmail: params.recipientEmail,
     subject,
     messageBody: body,
-    status: "DELIVERED",
+    status: "PENDING", // PENDING by default
     attemptCount: 1,
     createdAt: new Date().toISOString(),
     idempotencyKey,
   };
+  
+  if (params.channel === "EMAIL" && params.recipientEmail) {
+    try {
+      const res = await fetch("/api/notifications/dispatch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          channel: "EMAIL",
+          recipient: params.recipientEmail,
+          template: params.eventType,
+          tenantName: params.recipientName,
+          customMessage: body,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        record.status = "SENT"; // Not DELIVERED unless we have webhooks, but SENT is accurate
+      } else {
+        record.status = "FAILED";
+      }
+    } catch (e) {
+      record.status = "FAILED";
+    }
+  } else if (params.channel === "IN_APP") {
+    record.status = "DELIVERED";
+  } else {
+    // WHATSAPP etc which are not implemented backend
+    record.status = "FAILED"; 
+  }
 
   IN_MEMORY_NOTIFICATIONS.unshift(record);
   return record;

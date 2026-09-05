@@ -56,11 +56,7 @@ import {
   resolveAdministrativeFeePolicy,
   DEFAULT_COMMISSION_SETTINGS 
 } from "../../services/financialEngine";
-import { runAllPhase1FinancialTests, Phase1TestReport } from "../../tests/phase1FinancialTests";
-import { runPhase2FinancialTests, Phase2TestResult } from "../../tests/phase2FinancialTests";
 import { FinancialReconciliationCenter } from "./FinancialReconciliationCenter";
-import { runPhase18FinancialControlTests, TestResult as Phase18TestResult } from "../../utils/phase18FinancialControlTests";
-import { runPhase55FinancialReportingReconciliationTests } from "../../utils/phase55FinancialReportingReconciliationTests";
 import { SearchableSelect } from "../common/SearchableSelect";
 import { ChartOfAccountsView } from "./ChartOfAccountsView";
 import { GeneralLedgerView } from "./GeneralLedgerView";

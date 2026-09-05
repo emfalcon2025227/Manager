@@ -31,10 +31,6 @@ import { CloseBackButton } from "../common/CloseBackButton";
 import { Badge } from "../common/Badge";
 import { SearchableSelect } from "../common/SearchableSelect";
 import { downloadElementAsPdf } from "../../utils/pdfExportUtils";
-import { runPhase11ReportingTests, Phase11TestReport } from "../../utils/phase11Tests";
-import { runPhase26FinalUITestSuite } from "../../utils/phase26FinalUITestSuite";
-import { runPhase27SystemWideQATestSuite } from "../../utils/phase27SystemWideQATestSuite";
-import { runPhase28ProductionReadinessTests } from "../../utils/phase28ProductionReadinessTests";
 
 export const ReportsView: React.FC = () => {
   const { t, language } = useLanguage();

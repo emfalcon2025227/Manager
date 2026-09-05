@@ -41,12 +41,6 @@ import { UniversalReportFilter } from "../common/UniversalReportFilter";
 import { ReportPrintHeader, ReportPrintFooter } from "./reports/ReportPrintHeader";
 import { groupReportItems } from "./reports/reportGroupingUtils";
 import { UniversalReportFilters, ReportItemBase, ReportGroupByOption } from "../../types/reportingTypes";
-import { runPhase23AdvancedReportingTests, Phase23TestSuiteReport } from "../../utils/phase23AdvancedReportingTests";
-import { runPhase26FinalUITestSuite, Phase26TestReport } from "../../utils/phase26FinalUITestSuite";
-import { runPhase27SystemWideQATestSuite, Phase27TestReport } from "../../utils/phase27SystemWideQATestSuite";
-import { runPhase28ProductionReadinessTests, Phase28TestReport } from "../../utils/phase28ProductionReadinessTests";
-import { runPhase29GoLiveReadinessTests, Phase29TestReport } from "../../utils/phase29GoLiveReadinessTests";
-import { runPhase30ProductionOperationsTests } from "../../utils/phase30ProductionOperationsTests";
 import { generateOwnerStatement, generateTenantStatement } from "../../services/financialEngine";
 
 export const FinancialReportsView: React.FC = () => {
