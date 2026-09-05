@@ -623,7 +623,8 @@ export function validatePaymentAllocations(
     targetId: string;
     allocatedAmount: number;
     targetCurrentOutstanding?: number;
-  }>
+  }>,
+  requireExactMatch: boolean = false
 ): { isValid: boolean; error?: string } {
   if (paymentAmount <= 0) {
     return { isValid: false, error: "Payment amount must be greater than zero." };
@@ -656,6 +657,13 @@ export function validatePaymentAllocations(
     return {
       isValid: false,
       error: `Sum of allocations (${totalAllocated} AED) exceeds payment receipt amount (${paymentAmount} AED).`,
+    };
+  }
+  
+  if (requireExactMatch && Math.abs(totalAllocated - paymentAmount) > 0.0001) {
+    return {
+      isValid: false,
+      error: `Sum of allocations (${totalAllocated} AED) must exactly match the payment receipt amount (${paymentAmount} AED).`,
     };
   }
 
@@ -965,6 +973,59 @@ export interface OwnerPayableDetails {
  * Computes authoritative Owner Payable balance derived strictly from source transactions.
  * Formula: Rent Collections - Owner Commissions - Owner-Borne Property Expenses - Completed Transfers ± Adjustments/Reversals
  */
+export function calculateCollectionAllocations(col: CollectionRecord, paymentAllocations: PaymentAllocation[] = []) {
+  const activeAllocations = paymentAllocations.filter(a => a.collectionId === col.id && a.status === "ACTIVE");
+  
+  if (activeAllocations.length > 0) {
+    let rent = 0;
+    let admin = 0;
+    let municipality = 0;
+    
+    activeAllocations.forEach(a => {
+      if (a.targetType === "RENT" || a.targetType === "LEASE_INSTALLMENT") {
+        rent += a.allocatedAmount;
+      } else if (a.targetType === "ADMINISTRATIVE_FEE") {
+        admin += a.allocatedAmount;
+      } else if (a.targetType === "MUNICIPALITY_FEE") {
+        municipality += a.allocatedAmount;
+      }
+    });
+    
+    return { rent, admin, municipality, hasAllocations: true };
+  } else {
+    // Legacy mapping where amountEntered contains the full amount
+    const bounce = col.bouncedFeeAmount || 0;
+    const admin = col.adminFeeAmount || 0;
+    const rent = Math.max(0, col.amountEntered - bounce - admin);
+    return { rent, admin, municipality: 0, hasAllocations: false };
+  }
+}
+
+export function calculateChequeAllocations(cheque: Cheque, paymentAllocations: PaymentAllocation[] = []) {
+  const activeAllocations = paymentAllocations.filter(a => a.chequeId === cheque.id && a.status === "ACTIVE");
+  
+  if (activeAllocations.length > 0) {
+    let rent = 0;
+    let admin = 0;
+    let municipality = 0;
+    
+    activeAllocations.forEach(a => {
+      if (a.targetType === "RENT" || a.targetType === "LEASE_INSTALLMENT") {
+        rent += a.allocatedAmount;
+      } else if (a.targetType === "ADMINISTRATIVE_FEE") {
+        admin += a.allocatedAmount;
+      } else if (a.targetType === "MUNICIPALITY_FEE") {
+        municipality += a.allocatedAmount;
+      }
+    });
+    
+    return { rent, admin, municipality, hasAllocations: true };
+  } else {
+    // Default backward compatibility: whole amount is RENT
+    return { rent: cheque.amount, admin: 0, municipality: 0, hasAllocations: false };
+  }
+}
+
 export function computeOwnerPayableDetails(
   ownerId: string,
   data: {
@@ -974,6 +1035,7 @@ export function computeOwnerPayableDetails(
     transfers: OwnerTransferRecord[];
     adjustments: FinancialAdjustmentRecord[];
     reversals: FinancialReversalRecord[];
+    paymentAllocations?: PaymentAllocation[];
   }
 ): OwnerPayableDetails {
   const reversedCollectionIds = new Set(
@@ -990,7 +1052,10 @@ export function computeOwnerPayableDetails(
   const validCollections = data.collections.filter(
     (c) => c.ownerId === ownerId && !reversedCollectionIds.has(c.id)
   );
-  const totalRentCollected = validCollections.reduce((sum, c) => sum + (c.amountEntered || 0), 0);
+  const totalRentCollected = validCollections.reduce((sum, c) => {
+    const allocs = calculateCollectionAllocations(c, data.paymentAllocations);
+    return sum + allocs.rent;
+  }, 0);
 
   // 2. Owner Commission Deductions
   const validCommissions = data.commissions.filter(
@@ -1077,6 +1142,7 @@ export function generateOwnerStatement(
     reversals: FinancialReversalRecord[];
     leases?: Lease[];
     tenants?: Tenant[];
+    paymentAllocations?: PaymentAllocation[];
   }
 ): OwnerStatementReport {
   const reversedCollectionIds = new Set(
@@ -1111,7 +1177,8 @@ export function generateOwnerStatement(
     if (!col || col.ownerId !== ownerId || reversedCollectionIds.has(col.id)) continue;
     if (filters.propertyId && (col as any).propertyId && (col as any).propertyId !== filters.propertyId) continue;
 
-    const rentAmount = col.amountEntered - (col.bouncedFeeAmount || 0) - (col.adminFeeAmount || 0);
+    const allocs = calculateCollectionAllocations(col, data.paymentAllocations);
+    const rentAmount = allocs.rent;
     if (rentAmount <= 0) continue;
 
     const colId = col.id || "col";
@@ -1308,6 +1375,7 @@ export function generateTenantStatement(
     cheques: Cheque[];
     adjustments: FinancialAdjustmentRecord[];
     reversals: FinancialReversalRecord[];
+    paymentAllocations?: PaymentAllocation[];
   }
 ): TenantStatementReport {
   const reversedCollectionIds = new Set(
@@ -1442,10 +1510,11 @@ export function generateTenantStatement(
     // Categorize collection
     let category: NonNullable<TenantStatementItem["category"]> = "RENT";
     let desc = `سداد دفعة إيجار / سند قبض (${col.paymentMethod})`;
-    const rentAmount = col.amountEntered - (col.bouncedFeeAmount || 0) - (col.adminFeeAmount || 0);
+    const allocs = calculateCollectionAllocations(col, data.paymentAllocations);
+    const rentAmount = allocs.rent;
 
-    if (col.adminFeeAmount && col.adminFeeAmount > 0) {
-      totalAdminFees += col.adminFeeAmount;
+    if (allocs.admin && allocs.admin > 0) {
+      totalAdminFees += allocs.admin;
     }
     totalCollectedRent += Math.max(0, rentAmount);
 
@@ -1456,7 +1525,7 @@ export function generateTenantStatement(
       eventType: "PAYMENT_RECEIVED",
       category: category,
       status: "COLLECTED",
-      description: desc + (col.adminFeeAmount ? ` (شامل رسوم إدارية ${col.adminFeeAmount} درهم)` : ""),
+      description: desc + (allocs.admin ? ` (شامل رسوم إدارية ${allocs.admin} درهم)` : ""),
       debit: 0,
       credit: col.amountEntered,
       sourceEntityId: colId,

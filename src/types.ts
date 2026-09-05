@@ -1368,13 +1368,17 @@ export type PaymentAllocationTargetType =
   | "COMMISSION"
   | "CHEQUE"
   | "SETTLEMENT"
-  | "UNALLOCATED_PREPAYMENT";
+  | "UNALLOCATED_PREPAYMENT"
+  | "RENT"
+  | "ADMINISTRATIVE_FEE"
+  | "MUNICIPALITY_FEE";
 
 export type PaymentAllocationStatus = "ACTIVE" | "REVERSED";
 
 export interface PaymentAllocation {
   id: string;
-  collectionId: string; // Foreign Key -> collections (Receipt)
+  collectionId?: string; // Foreign Key -> collections (Receipt) - Optional now
+  chequeId?: string;     // Foreign Key -> cheques (If allocation is for a cheque)
   targetType: PaymentAllocationTargetType;
   targetId: string; // Foreign Key to the target entity (e.g. chequeId, commissionId, installmentId)
   targetDescription?: string;
